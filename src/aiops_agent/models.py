@@ -309,6 +309,27 @@ class ToolExecutionResponse(BaseModel):
     supported_tools: list[str] = Field(default_factory=list)
 
 
+class ModuleDescriptor(BaseModel):
+    id: str
+    title: str
+    purpose: str
+    primary_tools: list[str] = Field(default_factory=list)
+    status: str
+
+
+class ModuleRunRequest(BaseModel):
+    action: str | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModuleRunResponse(BaseModel):
+    module: str
+    action: str
+    status: str
+    result: dict[str, Any] | None = None
+    message: str | None = None
+
+
 class KnowledgeIngestRequest(BaseModel):
     source_paths: list[str] | None = None
     max_files: int = 200

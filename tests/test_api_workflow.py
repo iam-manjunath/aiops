@@ -221,6 +221,49 @@ def test_integrations_knowledge_query_not_configured(client):
     assert body["status"] == "not_configured"
 
 
+def test_api_modules_lists_all_spec_modules(client):
+    response = client.get("/api/modules")
+
+    assert response.status_code == 200
+    body = response.json()
+    ids = {item["id"] for item in body}
+    assert ids == {
+        "resource_discovery_agent",
+        "vm_health_agent",
+        "network_troubleshooting_agent",
+        "cost_optimization_agent",
+        "security_agent",
+        "change_investigation_agent",
+        "incident_rca_agent",
+        "knowledge_base_agent",
+        "automation_agent",
+    }
+
+
+def test_api_modules_run_default_action(client):
+    response = client.post(
+        "/api/modules/change_investigation_agent/run",
+        json={"arguments": {"hours": 24, "limit": 10}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["module"] == "change_investigation_agent"
+    assert body["action"] == "get_recent_changes"
+    assert body["status"] == "ok"
+    assert body["result"]["status"] in {"not_configured", "configuration_only", "ok", "partial"}
+
+
+def test_api_modules_run_rejects_invalid_action(client):
+    response = client.post(
+        "/api/modules/automation_agent/run",
+        json={"action": "scale_vmss", "arguments": {}},
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported action" in response.json()["detail"]
+
+
 def test_api_chat_routes_to_activity_logs_tool(client):
     response = client.post(
         "/api/chat",

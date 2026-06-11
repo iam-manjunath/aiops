@@ -95,6 +95,24 @@ Invoke-RestMethod `
   -Uri http://127.0.0.1:8000/integrations/log-analytics/query
 ```
 
+List all specification modules exposed by the app:
+
+```powershell
+Invoke-RestMethod `
+  -Method Get `
+  -Uri http://127.0.0.1:8000/api/modules
+```
+
+Run a module action (example: Change Investigation Agent):
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"arguments":{"hours":24,"limit":20}}' `
+  -Uri http://127.0.0.1:8000/api/modules/change_investigation_agent/run
+```
+
 Analyze KQL rows with Azure OpenAI:
 
 ```powershell

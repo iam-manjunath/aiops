@@ -16,6 +16,18 @@ This document maps the current implementation to `Specification.md` and highligh
   - `POST /api/chat`
   - `GET /api/health`
   - `POST /api/tools/execute`
+  - `GET /api/modules`
+  - `POST /api/modules/{module_id}/run`
+- All nine specification modules are now exposed as first-class module APIs:
+  - `resource_discovery_agent`
+  - `vm_health_agent`
+  - `network_troubleshooting_agent`
+  - `cost_optimization_agent`
+  - `security_agent`
+  - `change_investigation_agent`
+  - `incident_rca_agent`
+  - `knowledge_base_agent`
+  - `automation_agent`
 - Spec-style tool names are now accepted by `POST /api/tools/execute`:
   - `search_resources`
   - `get_vm_health`
@@ -25,11 +37,11 @@ This document maps the current implementation to `Specification.md` and highligh
   - `investigate_incident`
   - `get_cost_analysis` (Azure Cost Management query integration)
   - `get_security_findings` (Defender assessment findings via Resource Graph)
-  - `restart_vm` (extension point)
-  - `start_vm` (extension point)
-  - `stop_vm` (extension point)
-  - `create_snapshot` (extension point)
-  - `run_automation_runbook` (extension point)
+  - `restart_vm`
+  - `start_vm`
+  - `stop_vm`
+  - `create_snapshot`
+  - `run_automation_runbook`
 
 ## Partially Covered
 
@@ -38,7 +50,7 @@ This document maps the current implementation to `Specification.md` and highligh
   - Needs richer timeline synthesis and explicit corrective/preventive sections.
 - Automation Agent:
   - Approval and execution framework exists.
-  - Action catalog does not yet include `start_vm`, `stop_vm`, and `create_snapshot`.
+  - Module/tool actions `start_vm`, `stop_vm`, `create_snapshot`, and `run_automation_runbook` are exposed, but direct execution currently routes through approval-gated remediation boundaries and live adapters remain extension points.
 - Network Troubleshooting Agent:
   - Resource discovery and NSG inventory support exist.
   - Deep checks (route table effective routes, DNS test, load balancer probe diagnostics) are not yet implemented.
@@ -50,15 +62,14 @@ This document maps the current implementation to `Specification.md` and highligh
 
 - Dedicated `chat_messages` history table (current model stores session summary and message counts in `chat_sessions`).
 - Advanced RAG features (chunking strategy, embeddings/vector fields, and citation scoring).
-- Cost Management API integration for trend and rightsizing analysis.
-- Defender for Cloud + Azure Policy deeper evidence enrichment (current: Defender assessments via `securityresources`).
+- Defender for Cloud + Azure Policy deeper evidence enrichment (current: Defender assessments via `securityresources` query path).
 - Teams app channel and Teams message action integration.
 - Full React/Next.js frontend (current UI is server-rendered HTML).
 
 ## Recommended Next Changes
 
 1. Add optional `chat_messages` table for full conversational history and analytics.
-2. Implement Cost Management and Defender/Policy clients behind the existing tool dispatcher.
+2. Expand cost/security analysis output with trends, anomaly scoring, and policy correlation.
 3. Expand remediation catalog to include `start_vm`, `stop_vm`, and `create_snapshot` with explicit guardrails and rollback notes.
 4. Add Teams integration for approval actions and incident notifications.
 5. Add optional vector index + embeddings pipeline for hybrid search ranking.

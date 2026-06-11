@@ -43,6 +43,9 @@ from aiops_agent.models import (
     LogAnalyticsAnalyzeResponse,
     LogAnalyticsQueryRequest,
     LogAnalyticsQueryResponse,
+    ModuleDescriptor,
+    ModuleRunRequest,
+    ModuleRunResponse,
     KnowledgeIngestRequest,
     KnowledgeIngestResponse,
     KnowledgeQueryRequest,
@@ -106,6 +109,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "api_health": "GET /api/health",
                 "chat": "POST /api/chat",
                 "tool_execute": "POST /api/tools/execute",
+                "modules": "GET /api/modules",
+                "module_run": "POST /api/modules/{module_id}/run",
                 "azure_monitor_webhook": "POST /alerts/azure-monitor",
                 "integration_status": "GET /integrations/status",
                 "log_analytics_query": "POST /integrations/log-analytics/query",
@@ -142,6 +147,117 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "create_snapshot",
         "run_automation_runbook",
     ]
+
+    module_descriptors: list[ModuleDescriptor] = [
+        ModuleDescriptor(
+            id="resource_discovery_agent",
+            title="Resource Discovery Agent",
+            purpose="Discover Azure resources across subscriptions and resource groups.",
+            primary_tools=["search_resources"],
+            status="ready",
+        ),
+        ModuleDescriptor(
+            id="vm_health_agent",
+            title="VM Health Agent",
+            purpose="Analyze VM runtime health using Azure Monitor and Log Analytics.",
+            primary_tools=["get_vm_health", "query_monitor_metrics"],
+            status="ready",
+        ),
+        ModuleDescriptor(
+            id="network_troubleshooting_agent",
+            title="Network Troubleshooting Agent",
+            purpose="Inspect NSG and network-related signals for connectivity triage.",
+            primary_tools=["check_nsg_rules", "query_monitor_metrics"],
+            status="partial",
+        ),
+        ModuleDescriptor(
+            id="cost_optimization_agent",
+            title="Cost Optimization Agent",
+            purpose="Identify cost spikes and optimization opportunities using Azure cost data.",
+            primary_tools=["get_cost_analysis"],
+            status="ready",
+        ),
+        ModuleDescriptor(
+            id="security_agent",
+            title="Security Agent",
+            purpose="Surface security findings and risky exposure patterns.",
+            primary_tools=["get_security_findings"],
+            status="ready",
+        ),
+        ModuleDescriptor(
+            id="change_investigation_agent",
+            title="Change Investigation Agent",
+            purpose="Correlate recent control-plane and deployment changes.",
+            primary_tools=["get_activity_logs"],
+            status="ready",
+        ),
+        ModuleDescriptor(
+            id="incident_rca_agent",
+            title="Incident RCA Agent",
+            purpose="Investigate incidents with correlated telemetry and AI-assisted RCA.",
+            primary_tools=["investigate_incident"],
+            status="ready",
+        ),
+        ModuleDescriptor(
+            id="knowledge_base_agent",
+            title="Knowledge Base Agent",
+            purpose="Use runbooks/SOPs and enterprise docs via Azure AI Search + RAG.",
+            primary_tools=["query_knowledge_base", "ingest_knowledge_base"],
+            status="ready",
+        ),
+        ModuleDescriptor(
+            id="automation_agent",
+            title="Automation Agent",
+            purpose="Run approval-gated operational actions with audit and guardrails.",
+            primary_tools=[
+                "restart_vm",
+                "start_vm",
+                "stop_vm",
+                "create_snapshot",
+                "run_automation_runbook",
+            ],
+            status="partial",
+        ),
+    ]
+
+    module_action_map: dict[str, dict[str, str]] = {
+        "resource_discovery_agent": {"discover_resources": "search_resources"},
+        "vm_health_agent": {
+            "analyze_vm_health": "get_vm_health",
+            "query_monitor_metrics": "query_monitor_metrics",
+        },
+        "network_troubleshooting_agent": {
+            "check_nsg_rules": "check_nsg_rules",
+            "query_monitor_metrics": "query_monitor_metrics",
+        },
+        "cost_optimization_agent": {"analyze_cost": "get_cost_analysis"},
+        "security_agent": {"get_security_findings": "get_security_findings"},
+        "change_investigation_agent": {"get_recent_changes": "get_activity_logs"},
+        "incident_rca_agent": {"investigate_incident": "investigate_incident"},
+        "knowledge_base_agent": {
+            "query_knowledge": "query_knowledge_base",
+            "ingest_knowledge": "ingest_knowledge_base",
+        },
+        "automation_agent": {
+            "restart_vm": "restart_vm",
+            "start_vm": "start_vm",
+            "stop_vm": "stop_vm",
+            "create_snapshot": "create_snapshot",
+            "run_automation_runbook": "run_automation_runbook",
+        },
+    }
+
+    module_default_action: dict[str, str] = {
+        "resource_discovery_agent": "discover_resources",
+        "vm_health_agent": "analyze_vm_health",
+        "network_troubleshooting_agent": "check_nsg_rules",
+        "cost_optimization_agent": "analyze_cost",
+        "security_agent": "get_security_findings",
+        "change_investigation_agent": "get_recent_changes",
+        "incident_rca_agent": "investigate_incident",
+        "knowledge_base_agent": "query_knowledge",
+        "automation_agent": "restart_vm",
+    }
 
     def parse_string_list(value: Any) -> list[str] | None:
         if value is None:
@@ -493,6 +609,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             result=result,
             message=message,
             supported_tools=supported_tools,
+        )
+
+    @app.get("/api/modules", response_model=list[ModuleDescriptor])
+    def api_modules(_user: UserProfile = Depends(current_user)) -> list[ModuleDescriptor]:
+        return module_descriptors
+
+    @app.post("/api/modules/{module_id}/run", response_model=ModuleRunResponse)
+    def api_modules_run(
+        module_id: str,
+        request: ModuleRunRequest,
+        _user: UserProfile = Depends(current_user),
+    ) -> ModuleRunResponse:
+        actions = module_action_map.get(module_id)
+        if not actions:
+            raise HTTPException(status_code=404, detail=f"Module '{module_id}' not found.")
+
+        action = (request.action or module_default_action[module_id]).strip()
+        tool_name = actions.get(action)
+        if not tool_name:
+            available_actions = ", ".join(sorted(actions))
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported action '{action}' for module '{module_id}'. "
+                f"Available actions: {available_actions}",
+            )
+
+        status, result, message = execute_tool_call(tool_name, request.arguments)
+        return ModuleRunResponse(
+            module=module_id,
+            action=action,
+            status=status,
+            result=result,
+            message=message,
         )
 
     @app.post("/api/chat", response_model=ChatResponse)
@@ -945,14 +1094,25 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
     nav a { color: white; text-decoration: none; font-weight: 600; }
     .user { color: #d7e8f7; font-size: 14px; }
     main { max-width: 1160px; margin: 0 auto; padding: 24px; }
+    .layout { display: grid; grid-template-columns: 1.45fr 1fr; gap: 18px; align-items: start; }
+    @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+    .panel { background: white; border: 1px solid #d9e1ec; padding: 12px; }
+    .panel h2 { margin: 0 0 12px; font-size: 18px; }
     table { width: 100%; border-collapse: collapse; background: white; border: 1px solid #d9e1ec; }
     th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e6edf5; vertical-align: top; }
     th { background: #edf3f8; font-size: 13px; text-transform: uppercase; }
     button { border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
     .approve { background: #127a5b; color: white; }
     .reject { background: #a83232; color: white; }
+    .secondary { background: #d9e1ec; color: #17344f; }
     .muted { color: #5d6b7a; }
     .actions { display: flex; gap: 8px; }
+    .chat-log { min-height: 320px; max-height: 520px; overflow-y: auto; border: 1px solid #d9e1ec; padding: 10px; background: #f8fbff; }
+    .chat-msg { margin-bottom: 10px; padding: 8px 10px; border: 1px solid #d9e1ec; background: white; }
+    .chat-msg .who { font-size: 12px; color: #5d6b7a; margin-bottom: 4px; text-transform: uppercase; }
+    .chat-msg pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; background: #eef4f8; padding: 8px; }
+    .chat-input { width: 100%; box-sizing: border-box; margin-top: 10px; border: 1px solid #c9d6e4; padding: 10px; font: inherit; resize: vertical; min-height: 96px; }
+    .chat-actions { margin-top: 10px; display: flex; gap: 8px; }
   </style>
 </head>
 <body>
@@ -962,18 +1122,59 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
       <span class="user">__DISPLAY_NAME__</span>
       <a href="/">Status</a>
       <a href="/me">Profile</a>
+      <a href="/ui#chat">Chat</a>
       <a href="/docs">API Docs</a>
       <a href="/api/status">JSON</a>
       __AUTH_LINK__
     </nav>
   </header>
   <main>
-    <table>
-      <thead><tr><th>Incident</th><th>Severity</th><th>Status</th><th>Summary</th><th>Actions</th></tr></thead>
-      <tbody id="incidents"></tbody>
-    </table>
+    <div class="layout">
+      <section class="panel">
+        <h2>Incident Approvals</h2>
+        <table>
+          <thead><tr><th>Incident</th><th>Severity</th><th>Status</th><th>Summary</th><th>Actions</th></tr></thead>
+          <tbody id="incidents"></tbody>
+        </table>
+      </section>
+      <section class="panel" id="chat">
+        <h2>Copilot Chat</h2>
+        <div id="chatLog" class="chat-log"></div>
+        <textarea id="chatInput" class="chat-input" placeholder="Ask about resources, incidents, security, cost, or runbooks..."></textarea>
+        <div class="chat-actions">
+          <button class="approve" id="chatSend" onclick="sendChat()">Send</button>
+          <button class="secondary" onclick="clearChat()">Clear</button>
+        </div>
+      </section>
+    </div>
   </main>
   <script>
+    const CHAT_SESSION_KEY = 'aiops_chat_session_id';
+    function appendChat(role, text, toolResult) {
+      const chatLog = document.getElementById('chatLog');
+      const box = document.createElement('div');
+      box.className = 'chat-msg';
+      const who = document.createElement('div');
+      who.className = 'who';
+      who.textContent = role;
+      const body = document.createElement('div');
+      body.textContent = text || '';
+      box.appendChild(who);
+      box.appendChild(body);
+      if (toolResult) {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = 'Tool Result';
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(toolResult, null, 2);
+        details.appendChild(summary);
+        details.appendChild(pre);
+        box.appendChild(details);
+      }
+      chatLog.appendChild(box);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
     async function load() {
       const rows = document.getElementById('incidents');
       const incidents = await fetch('/incidents').then(r => r.json());
@@ -989,6 +1190,7 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
           </td>
         </tr>`).join('');
     }
+
     async function approve(id) {
       const approver = prompt('Approver email');
       if (!approver) return;
@@ -1010,6 +1212,51 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
       });
       load();
     }
+
+    async function sendChat() {
+      const input = document.getElementById('chatInput');
+      const sendButton = document.getElementById('chatSend');
+      const message = (input.value || '').trim();
+      if (!message) return;
+
+      appendChat('You', message);
+      input.value = '';
+      sendButton.disabled = true;
+      try {
+        const sessionId = localStorage.getItem(CHAT_SESSION_KEY);
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({message, session_id: sessionId || null})
+        });
+        const data = await response.json();
+        if (data.session_id) {
+          localStorage.setItem(CHAT_SESSION_KEY, data.session_id);
+        }
+        if (!response.ok) {
+          appendChat('Copilot', data.detail || 'Chat failed.');
+          return;
+        }
+        appendChat('Copilot', data.message || '', data.tool_result || null);
+      } catch (error) {
+        appendChat('Copilot', `Chat failed: ${error}`);
+      } finally {
+        sendButton.disabled = false;
+      }
+    }
+
+    function clearChat() {
+      localStorage.removeItem(CHAT_SESSION_KEY);
+      document.getElementById('chatLog').innerHTML = '';
+    }
+
+    document.getElementById('chatInput').addEventListener('keydown', function (event) {
+      if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        sendChat();
+      }
+    });
+
     load();
   </script>
 </body>
