@@ -1,0 +1,5 @@
+{
+  "source_paths": ["docs"],
+  "max_files": 200,
+  "force_reindex": false
+}

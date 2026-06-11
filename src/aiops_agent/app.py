@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from aiops_agent.ai_search import AzureAISearchService
 from aiops_agent.analyzer import build_analyzer
 from aiops_agent.auth import (
     SESSION_USER_KEY,
@@ -30,6 +31,7 @@ from aiops_agent.models import (
     ApproveRequest,
     AuthStatus,
     AuditEvent,
+    AzureAISearchStatus,
     AzureOpenAIStatus,
     AzureOpenAITestRequest,
     AzureOpenAITestResponse,
@@ -41,6 +43,10 @@ from aiops_agent.models import (
     LogAnalyticsAnalyzeResponse,
     LogAnalyticsQueryRequest,
     LogAnalyticsQueryResponse,
+    KnowledgeIngestRequest,
+    KnowledgeIngestResponse,
+    KnowledgeQueryRequest,
+    KnowledgeQueryResponse,
     RejectRequest,
     RemediationAction,
     ResourceDiscoveryRequest,
@@ -63,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     executor = RemediationExecutor(settings, store, AzureRemediationClient(settings))
     integrations = AzureEnterpriseIntegrationClient(settings)
     azure_openai = AzureOpenAIService(settings)
+    ai_search = AzureAISearchService(settings, azure_openai)
 
     app = FastAPI(title=settings.app_name, version="0.1.0")
     oauth = configure_auth(app, settings)
@@ -72,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.executor = executor
     app.state.integrations = integrations
     app.state.azure_openai = azure_openai
+    app.state.ai_search = ai_search
 
     def current_user(request: Request) -> UserProfile:
         return require_user(request, settings)
@@ -89,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "auth": auth_status(settings).model_dump(mode="json"),
             "azure_integrations": integrations.status().model_dump(mode="json"),
             "azure_openai": azure_openai.status().model_dump(mode="json"),
+            "ai_search": ai_search.status().model_dump(mode="json"),
             "docs": "/docs",
             "openapi": "/openapi.json",
             "ui": "/ui",
@@ -105,6 +114,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "resource_graph_discovery": "POST /integrations/resource-graph/discover",
                 "azure_openai_status": "GET /integrations/azure-openai/status",
                 "azure_openai_test": "POST /integrations/azure-openai/test",
+                "ai_search_status": "GET /integrations/ai-search/status",
+                "knowledge_ingest": "POST /integrations/knowledge/ingest",
+                "knowledge_query": "POST /integrations/knowledge/query",
                 "incidents": "GET /incidents",
                 "approval": "POST /incidents/{incident_id}/approve",
                 "rejection": "POST /incidents/{incident_id}/reject",
@@ -122,6 +134,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "investigate_incident",
         "get_cost_analysis",
         "get_security_findings",
+        "ingest_knowledge_base",
+        "query_knowledge_base",
         "restart_vm",
         "start_vm",
         "stop_vm",
@@ -317,6 +331,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status = "ok" if response.get("status") in {"ok", "configuration_only"} else "error"
             return status, response, response.get("message")
 
+        if tool_name == "ingest_knowledge_base":
+            response = ai_search.ingest_local_knowledge(
+                source_paths=parse_string_list(arguments.get("source_paths")),
+                max_files=parse_int(arguments.get("max_files"), 200),
+                force_reindex=bool(arguments.get("force_reindex", False)),
+            )
+            status = (
+                "ok"
+                if response.status in {"ok", "partial", "configuration_only", "no_documents"}
+                else "error"
+            )
+            return status, response.model_dump(mode="json"), response.message
+
+        if tool_name == "query_knowledge_base":
+            query = str(arguments.get("query") or "").strip()
+            if not query:
+                return "error", {}, "query_knowledge_base requires a non-empty query argument."
+            response = ai_search.query_knowledge(
+                query=query,
+                top=parse_int(arguments.get("top"), 5),
+                use_ai_summary=bool(arguments.get("use_ai_summary", True)),
+            )
+            status = "ok" if response.status in {"ok", "configuration_only"} else "error"
+            return status, response.model_dump(mode="json"), response.message
+
         return (
             "invalid_tool",
             {},
@@ -331,6 +370,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return "get_cost_analysis"
         if any(token in text for token in ["security", "vulnerability", "rdp", "public ip"]):
             return "get_security_findings"
+        if any(token in text for token in ["runbook", "sop", "how do i", "recovery", "recover"]):
+            return "query_knowledge_base"
         if any(token in text for token in ["ssh", "https", "network", "nsg", "connectivity"]):
             return "check_nsg_rules"
         if any(token in text for token in ["investigate", "rca", "outage", "incident"]):
@@ -363,6 +404,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             elif "vm" in text:
                 arguments["resource_types"] = ["microsoft.compute/virtualmachines"]
             arguments["limit"] = 50
+        if tool_name == "query_knowledge_base":
+            arguments["query"] = message
+            arguments["top"] = 5
         return arguments
 
     @app.get("/", response_class=HTMLResponse, response_model=None)
@@ -516,12 +560,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def azure_openai_status(_user: UserProfile = Depends(current_user)) -> AzureOpenAIStatus:
         return azure_openai.status()
 
+    @app.get("/integrations/ai-search/status", response_model=AzureAISearchStatus)
+    def ai_search_status(_user: UserProfile = Depends(current_user)) -> AzureAISearchStatus:
+        return ai_search.status()
+
     @app.post("/integrations/azure-openai/test", response_model=AzureOpenAITestResponse)
     def azure_openai_test(
         request: AzureOpenAITestRequest,
         _user: UserProfile = Depends(current_user),
     ) -> AzureOpenAITestResponse:
         return azure_openai.test_chat(request.prompt)
+
+    @app.post("/integrations/knowledge/ingest", response_model=KnowledgeIngestResponse)
+    def knowledge_ingest(
+        request: KnowledgeIngestRequest,
+        _user: UserProfile = Depends(current_user),
+    ) -> KnowledgeIngestResponse:
+        return ai_search.ingest_local_knowledge(
+            source_paths=request.source_paths,
+            max_files=request.max_files,
+            force_reindex=request.force_reindex,
+        )
+
+    @app.post("/integrations/knowledge/query", response_model=KnowledgeQueryResponse)
+    def knowledge_query(
+        request: KnowledgeQueryRequest,
+        _user: UserProfile = Depends(current_user),
+    ) -> KnowledgeQueryResponse:
+        return ai_search.query_knowledge(
+            query=request.query,
+            top=request.top,
+            use_ai_summary=request.use_ai_summary,
+        )
 
     @app.post("/integrations/log-analytics/query", response_model=LogAnalyticsQueryResponse)
     def query_log_analytics(

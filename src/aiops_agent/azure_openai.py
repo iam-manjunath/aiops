@@ -204,6 +204,21 @@ class AzureOpenAIService:
                 message=str(exc),
             )
 
+    def complete_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_output_tokens: int = 1200,
+    ) -> str:
+        status = self.status()
+        if not status.configured:
+            raise ValueError(status.message)
+        return self._complete_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_output_tokens=max_output_tokens,
+        )
+
     def _complete_text(
         self,
         system_prompt: str,

@@ -11,6 +11,7 @@ This document maps the current implementation to `Specification.md` and highligh
 - Approval-gated remediation workflow with audit trail.
 - Pluggable persistence backend with local JSON and PostgreSQL support (`AIOPS_STATE_BACKEND`).
 - Relational persistence for `users` and `chat_sessions` with `/api/chat` session tracking.
+- Azure AI Search knowledge ingestion/query with RAG-style answer synthesis via Azure OpenAI.
 - API contract additions requested in the specification:
   - `POST /api/chat`
   - `GET /api/health`
@@ -48,7 +49,7 @@ This document maps the current implementation to `Specification.md` and highligh
 ## Not Implemented Yet
 
 - Dedicated `chat_messages` history table (current model stores session summary and message counts in `chat_sessions`).
-- Azure AI Search + RAG knowledge base ingestion/query.
+- Advanced RAG features (chunking strategy, embeddings/vector fields, and citation scoring).
 - Cost Management API integration for trend and rightsizing analysis.
 - Defender for Cloud + Azure Policy deeper evidence enrichment (current: Defender assessments via `securityresources`).
 - Teams app channel and Teams message action integration.
@@ -58,9 +59,9 @@ This document maps the current implementation to `Specification.md` and highligh
 
 1. Add optional `chat_messages` table for full conversational history and analytics.
 2. Implement Cost Management and Defender/Policy clients behind the existing tool dispatcher.
-3. Add first RAG pipeline with Azure AI Search index + document ingestion job for SOPs/runbooks.
-4. Expand remediation catalog to include `start_vm`, `stop_vm`, and `create_snapshot` with explicit guardrails and rollback notes.
-5. Add Teams integration for approval actions and incident notifications.
+3. Expand remediation catalog to include `start_vm`, `stop_vm`, and `create_snapshot` with explicit guardrails and rollback notes.
+4. Add Teams integration for approval actions and incident notifications.
+5. Add optional vector index + embeddings pipeline for hybrid search ranking.
 
 ## Notes
 

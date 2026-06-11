@@ -39,6 +39,15 @@ def test_azure_openai_status_endpoint_reports_not_configured(client):
     assert body["endpoint_configured"] is False
 
 
+def test_ai_search_status_endpoint_reports_not_configured(client):
+    response = client.get("/integrations/ai-search/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["configured"] is False
+    assert body["endpoint_configured"] is False
+
+
 def test_me_returns_html_profile_when_auth_is_disabled(client):
     response = client.get("/me")
 
@@ -187,6 +196,29 @@ def test_api_tools_execute_security_findings(client):
     body = response.json()
     assert body["status"] == "error"
     assert body["result"]["status"] == "not_configured"
+
+
+def test_api_tools_execute_query_knowledge_base_not_configured(client):
+    response = client.post(
+        "/api/tools/execute",
+        json={"tool": "query_knowledge_base", "arguments": {"query": "How do I recover SAP HANA?"}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "error"
+    assert body["result"]["status"] == "not_configured"
+
+
+def test_integrations_knowledge_query_not_configured(client):
+    response = client.post(
+        "/integrations/knowledge/query",
+        json={"query": "How do I recover SAP HANA?", "top": 5, "use_ai_summary": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "not_configured"
 
 
 def test_api_chat_routes_to_activity_logs_tool(client):

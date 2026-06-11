@@ -30,6 +30,7 @@ Open `http://127.0.0.1:8000/docs` for the API.
 For a handoff-friendly setup guide, see `docs/python-environment.md`.
 For Microsoft Entra ID login setup, see `docs/microsoft-login.md`.
 For Azure OpenAI setup, see `docs/azure-openai.md`.
+For Azure AI Search RAG setup, see `docs/ai-search-rag.md`.
 For current spec coverage and next implementation priorities, see `docs/spec-alignment.md`.
 
 Post the sample alert:

@@ -259,6 +259,18 @@ class AzureOpenAIStatus(BaseModel):
     message: str
 
 
+class AzureAISearchStatus(BaseModel):
+    enabled: bool
+    configured: bool
+    endpoint_configured: bool
+    index_configured: bool
+    auth_mode: str
+    api_key_configured: bool
+    endpoint: str | None = None
+    index: str | None = None
+    message: str
+
+
 class AzureOpenAITestRequest(BaseModel):
     prompt: str = "Return one short sentence confirming Azure OpenAI connectivity."
 
@@ -295,3 +307,36 @@ class ToolExecutionResponse(BaseModel):
     result: dict[str, Any] | None = None
     message: str | None = None
     supported_tools: list[str] = Field(default_factory=list)
+
+
+class KnowledgeIngestRequest(BaseModel):
+    source_paths: list[str] | None = None
+    max_files: int = 200
+    force_reindex: bool = False
+
+
+class KnowledgeIngestResponse(BaseModel):
+    status: str
+    index: str | None = None
+    document_count: int = 0
+    indexed_count: int = 0
+    failed_count: int = 0
+    sources: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    message: str | None = None
+
+
+class KnowledgeQueryRequest(BaseModel):
+    query: str
+    top: int = 5
+    use_ai_summary: bool = True
+
+
+class KnowledgeQueryResponse(BaseModel):
+    status: str
+    index: str | None = None
+    query: str
+    hit_count: int = 0
+    hits: list[dict[str, Any]] = Field(default_factory=list)
+    answer: str | None = None
+    message: str | None = None

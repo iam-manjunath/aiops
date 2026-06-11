@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     azure_openai_api_version: str = "2024-02-15-preview"
     azure_openai_api_key: str | None = None
     azure_openai_auth_mode: Literal["api_key", "managed_identity"] = "api_key"
+    ai_search_endpoint: str | None = None
+    ai_search_index: str | None = None
+    ai_search_api_key: str | None = None
+    ai_search_auth_mode: Literal["api_key", "managed_identity"] = "api_key"
+    knowledge_source_paths: str = "docs"
+    knowledge_file_extensions: str = ".md,.txt,.rst"
+    knowledge_max_file_size_kb: int = 512
 
     @field_validator("remediation_allowlist", "destructive_action_allowlist")
     @classmethod
@@ -114,6 +121,26 @@ class Settings(BaseSettings):
     @property
     def auth_metadata_url(self) -> str:
         return f"{self.auth_authority}/v2.0/.well-known/openid-configuration"
+
+    @property
+    def knowledge_source_path_list(self) -> list[str]:
+        return [part.strip() for part in self.knowledge_source_paths.split(",") if part.strip()]
+
+    @property
+    def knowledge_file_extension_set(self) -> set[str]:
+        return {
+            part.strip().lower()
+            for part in self.knowledge_file_extensions.split(",")
+            if part.strip()
+        }
+
+    @property
+    def ai_search_configured(self) -> bool:
+        if not (self.ai_search_endpoint and self.ai_search_index):
+            return False
+        if self.ai_search_auth_mode == "api_key":
+            return bool(self.ai_search_api_key)
+        return True
 
 
 @lru_cache

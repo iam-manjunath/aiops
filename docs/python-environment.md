@@ -34,6 +34,18 @@ AIOPS_POSTGRES_SCHEMA=aiops
 
 Schema bootstrap SQL: `infra/sql/001_state_store.sql`.
 
+For Azure AI Search knowledge ingestion/query, set:
+
+```env
+AIOPS_AI_SEARCH_ENDPOINT=https://<search-service>.search.windows.net
+AIOPS_AI_SEARCH_INDEX=aiops-knowledge
+AIOPS_AI_SEARCH_API_KEY=<search-key>
+AIOPS_AI_SEARCH_AUTH_MODE=api_key
+AIOPS_KNOWLEDGE_SOURCE_PATHS=docs
+AIOPS_KNOWLEDGE_FILE_EXTENSIONS=.md,.txt,.rst
+AIOPS_KNOWLEDGE_MAX_FILE_SIZE_KB=512
+```
+
 ## Office Laptop Test
 
 On the office laptop, update `.env` with the real subscription and workspace mapping:
