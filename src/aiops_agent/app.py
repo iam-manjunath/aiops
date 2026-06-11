@@ -1,5 +1,7 @@
 import html
+import re
 import sys
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -31,6 +33,8 @@ from aiops_agent.models import (
     AzureOpenAIStatus,
     AzureOpenAITestRequest,
     AzureOpenAITestResponse,
+    ChatRequest,
+    ChatResponse,
     Incident,
     IntegrationStatus,
     LogAnalyticsAnalyzeRequest,
@@ -41,6 +45,8 @@ from aiops_agent.models import (
     RemediationAction,
     ResourceDiscoveryRequest,
     ResourceDiscoveryResponse,
+    ToolExecutionRequest,
+    ToolExecutionResponse,
     UserProfile,
 )
 from aiops_agent.remediation import RemediationExecutor
@@ -88,6 +94,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "ui": "/ui",
             "endpoints": {
                 "health": "GET /healthz",
+                "api_health": "GET /api/health",
+                "chat": "POST /api/chat",
+                "tool_execute": "POST /api/tools/execute",
                 "azure_monitor_webhook": "POST /alerts/azure-monitor",
                 "integration_status": "GET /integrations/status",
                 "log_analytics_query": "POST /integrations/log-analytics/query",
@@ -103,6 +112,255 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "profile_json": "GET /api/me",
             },
         }
+
+    supported_tools = [
+        "search_resources",
+        "get_vm_health",
+        "query_monitor_metrics",
+        "get_activity_logs",
+        "check_nsg_rules",
+        "investigate_incident",
+        "get_cost_analysis",
+        "get_security_findings",
+        "restart_vm",
+        "start_vm",
+        "stop_vm",
+        "create_snapshot",
+        "run_automation_runbook",
+    ]
+
+    def parse_string_list(value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return None
+
+    def parse_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def kql_escape(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    def execute_tool_call(tool_name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
+        if tool_name == "search_resources":
+            request = ResourceDiscoveryRequest(
+                subscriptions=parse_string_list(arguments.get("subscriptions")),
+                resource_types=parse_string_list(arguments.get("resource_types"))
+                or ResourceDiscoveryRequest().resource_types,
+                limit=parse_int(arguments.get("limit"), 100),
+            )
+            response = integrations.discover_resources(request)
+            return "ok", response.model_dump(mode="json"), None
+
+        if tool_name == "query_monitor_metrics":
+            query = arguments.get("query") or "AzureMetrics | where TimeGenerated > ago(1h) | take 50"
+            request = LogAnalyticsQueryRequest(
+                query=query,
+                subscription_id=arguments.get("subscription_id"),
+                workspace_id=arguments.get("workspace_id"),
+                timespan_minutes=parse_int(arguments.get("timespan_minutes"), 60),
+            )
+            response = integrations.query_log_analytics(request)
+            return "ok", response.model_dump(mode="json"), None
+
+        if tool_name == "get_activity_logs":
+            hours = parse_int(arguments.get("hours"), 24)
+            limit = parse_int(arguments.get("limit"), 50)
+            query = arguments.get("query") or (
+                f"AzureActivity | where TimeGenerated > ago({hours}h) "
+                "| project TimeGenerated, Caller, OperationNameValue, ActivityStatusValue, "
+                "_ResourceId, CorrelationId "
+                f"| order by TimeGenerated desc | take {limit}"
+            )
+            request = LogAnalyticsQueryRequest(
+                query=query,
+                subscription_id=arguments.get("subscription_id"),
+                workspace_id=arguments.get("workspace_id"),
+                timespan_minutes=parse_int(arguments.get("timespan_minutes"), hours * 60),
+            )
+            response = integrations.query_log_analytics(request)
+            return "ok", response.model_dump(mode="json"), None
+
+        if tool_name == "get_vm_health":
+            vm_name = str(arguments.get("vm_name") or "").strip()
+            resource_id = str(arguments.get("resource_id") or "").strip()
+            limit = parse_int(arguments.get("limit"), 50)
+            query = arguments.get("query")
+            if not query:
+                if resource_id:
+                    scope_filter = f'| where _ResourceId =~ "{kql_escape(resource_id)}"'
+                elif vm_name:
+                    scope_filter = f'| where Computer has "{kql_escape(vm_name)}"'
+                else:
+                    scope_filter = ""
+                query = (
+                    "let window=ago(1h);"
+                    " union isfuzzy=true "
+                    "("
+                    "Heartbeat "
+                    "| where TimeGenerated > window "
+                    f"{scope_filter} "
+                    "| project TimeGenerated, Computer, _ResourceId, SourceSystem, Category='Heartbeat'"
+                    "),"
+                    "("
+                    "Perf "
+                    "| where TimeGenerated > window "
+                    "| where CounterName in ('% Processor Time', 'Available MBytes') "
+                    f"{scope_filter} "
+                    "| project TimeGenerated, Computer, _ResourceId, CounterName, CounterValue, Category='Perf'"
+                    ") "
+                    "| order by TimeGenerated desc "
+                    f"| take {limit}"
+                )
+            request = LogAnalyticsQueryRequest(
+                query=query,
+                subscription_id=arguments.get("subscription_id"),
+                workspace_id=arguments.get("workspace_id"),
+                timespan_minutes=parse_int(arguments.get("timespan_minutes"), 60),
+            )
+            response = integrations.query_log_analytics(request)
+            return "ok", response.model_dump(mode="json"), None
+
+        if tool_name == "check_nsg_rules":
+            request = ResourceDiscoveryRequest(
+                subscriptions=parse_string_list(arguments.get("subscriptions")),
+                resource_types=["microsoft.network/networksecuritygroups"],
+                limit=parse_int(arguments.get("limit"), 100),
+            )
+            response = integrations.discover_resources(request)
+            payload = response.model_dump(mode="json")
+            nsg_name = str(arguments.get("nsg_name") or "").strip().lower()
+            if nsg_name and payload.get("resources"):
+                payload["resources"] = [
+                    resource
+                    for resource in payload["resources"]
+                    if nsg_name in str(resource.get("name", "")).lower()
+                ]
+            payload["filtered_count"] = len(payload.get("resources", []))
+            return "ok", payload, None
+
+        if tool_name == "investigate_incident":
+            query = arguments.get("query") or (
+                "union isfuzzy=true "
+                "(AzureActivity | where TimeGenerated > ago(4h) | where ActivityStatusValue !~ 'Success' "
+                "| project TimeGenerated, Severity='Sev3', RuleName=OperationNameValue, "
+                "ResourceId=_ResourceId, Description=tostring(Properties)), "
+                "(Perf | where TimeGenerated > ago(4h) | where CounterName == '% Processor Time' "
+                "| where CounterValue > 90 | project TimeGenerated, Severity='Sev2', "
+                "RuleName='High CPU', ResourceId=_ResourceId, "
+                "Description=strcat('CPU high: ', tostring(CounterValue))) "
+                "| order by TimeGenerated desc | take 50"
+            )
+            query_request = LogAnalyticsQueryRequest(
+                query=query,
+                subscription_id=arguments.get("subscription_id"),
+                workspace_id=arguments.get("workspace_id"),
+                timespan_minutes=parse_int(arguments.get("timespan_minutes"), 240),
+            )
+            query_response = integrations.query_log_analytics(query_request)
+            analysis_prompt = arguments.get("prompt") or (
+                "Investigate this incident dataset, summarize impact, likely root causes, and "
+                "approval-gated corrective actions."
+            )
+            analysis_response = azure_openai.analyze_log_rows(
+                query_result=query_response,
+                prompt=analysis_prompt,
+                max_rows=parse_int(arguments.get("max_rows"), 50),
+            )
+            return (
+                "ok",
+                {
+                    "query": query_response.model_dump(mode="json"),
+                    "analysis": analysis_response.model_dump(mode="json"),
+                },
+                None,
+            )
+
+        if tool_name in {"restart_vm", "start_vm", "stop_vm", "create_snapshot", "run_automation_runbook"}:
+            return (
+                "not_implemented",
+                {
+                    "requested_tool": tool_name,
+                    "next_step": "Use incident approval workflow endpoints for controlled execution.",
+                    "available_action_types": [
+                        "restart_vm",
+                        "resize_vmss",
+                        "run_automation_webhook",
+                        "adjust_autoscale_rule",
+                        "create_ticket",
+                        "manual_action_required",
+                    ],
+                },
+                "Execution tools are approval-gated and partially scaffolded in this MVP.",
+            )
+
+        if tool_name in {"get_cost_analysis", "get_security_findings"}:
+            return (
+                "not_implemented",
+                {
+                    "requested_tool": tool_name,
+                    "status": "extension_point",
+                    "message": (
+                        "This tool is designed in the architecture but needs dedicated Azure Cost "
+                        "Management and Defender/Policy clients in a follow-up sprint."
+                    ),
+                },
+                None,
+            )
+
+        return (
+            "invalid_tool",
+            {},
+            f"Unsupported tool '{tool_name}'. Use one of: {', '.join(supported_tools)}",
+        )
+
+    def infer_tool_from_message(message: str) -> str | None:
+        text = message.lower()
+        if any(token in text for token in ["what changed", "changed", "modified", "deployment"]):
+            return "get_activity_logs"
+        if any(token in text for token in ["cost", "expensive", "idle vm", "rightsizing"]):
+            return "get_cost_analysis"
+        if any(token in text for token in ["security", "vulnerability", "rdp", "public ip"]):
+            return "get_security_findings"
+        if any(token in text for token in ["ssh", "https", "network", "nsg", "connectivity"]):
+            return "check_nsg_rules"
+        if any(token in text for token in ["investigate", "rca", "outage", "incident"]):
+            return "investigate_incident"
+        if any(token in text for token in ["unavailable", "down", "cpu spike", "vm health"]):
+            return "get_vm_health"
+        if any(token in text for token in ["show", "list", "resources", "vms", "vmss", "aks"]):
+            return "search_resources"
+        return None
+
+    def infer_arguments_from_message(message: str, tool_name: str) -> dict[str, Any]:
+        text = message.lower()
+        arguments: dict[str, Any] = {}
+        if "last 24" in text or "yesterday" in text:
+            arguments["hours"] = 24
+        if "last 12" in text:
+            arguments["hours"] = 12
+        if "last 1 hour" in text or "last hour" in text:
+            arguments["hours"] = 1
+
+        quoted = re.search(r"`([^`]+)`", message) or re.search(r"'([^']+)'", message)
+        if quoted and tool_name in {"get_vm_health", "restart_vm", "start_vm", "stop_vm"}:
+            arguments["vm_name"] = quoted.group(1).strip()
+
+        if tool_name == "search_resources":
+            if "vmss" in text:
+                arguments["resource_types"] = ["microsoft.compute/virtualmachinescalesets"]
+            elif "aks" in text:
+                arguments["resource_types"] = ["microsoft.containerservice/managedclusters"]
+            elif "vm" in text:
+                arguments["resource_types"] = ["microsoft.compute/virtualmachines"]
+            arguments["limit"] = 50
+        return arguments
 
     @app.get("/", response_class=HTMLResponse, response_model=None)
     def root() -> str:
@@ -167,6 +425,63 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/health")
+    def api_health() -> dict[str, str]:
+        return {
+            "status": "ok",
+            "service": settings.app_name,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        }
+
+    @app.post("/api/tools/execute", response_model=ToolExecutionResponse)
+    def api_tools_execute(
+        request: ToolExecutionRequest,
+        _user: UserProfile = Depends(current_user),
+    ) -> ToolExecutionResponse:
+        status, result, message = execute_tool_call(request.tool, request.arguments)
+        return ToolExecutionResponse(
+            status=status,
+            tool=request.tool,
+            result=result,
+            message=message,
+            supported_tools=supported_tools,
+        )
+
+    @app.post("/api/chat", response_model=ChatResponse)
+    def api_chat(
+        request: ChatRequest,
+        _user: UserProfile = Depends(current_user),
+    ) -> ChatResponse:
+        suggested_tool = infer_tool_from_message(request.message)
+        if not suggested_tool:
+            return ChatResponse(
+                status="ok",
+                message=(
+                    "I can route this through operations tools. Try asking about resources, VM health, "
+                    "activity changes, incident investigation, security, or costs."
+                ),
+                session_id=request.session_id,
+                suggested_tool=None,
+                tool_result=None,
+            )
+
+        tool_arguments = infer_arguments_from_message(request.message, suggested_tool)
+        tool_status, tool_result, tool_message = execute_tool_call(suggested_tool, tool_arguments)
+        response_message = (
+            f"Executed tool '{suggested_tool}' with status '{tool_status}'. "
+            "Review tool_result for evidence and next actions."
+        )
+        if tool_message:
+            response_message = f"{response_message} {tool_message}"
+
+        return ChatResponse(
+            status="ok",
+            message=response_message,
+            session_id=request.session_id,
+            suggested_tool=suggested_tool,
+            tool_result=tool_result,
+        )
 
     @app.post("/alerts/azure-monitor", response_model=AlertIngestResponse)
     def ingest_azure_monitor_alert(payload: dict[str, Any]) -> AlertIngestResponse:

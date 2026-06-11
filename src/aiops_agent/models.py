@@ -269,3 +269,29 @@ class AzureOpenAITestResponse(BaseModel):
     deployment: str | None = None
     output: str | None = None
     message: str | None = None
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str | None = None
+
+
+class ChatResponse(BaseModel):
+    status: str
+    message: str
+    session_id: str | None = None
+    suggested_tool: str | None = None
+    tool_result: dict[str, Any] | None = None
+
+
+class ToolExecutionRequest(BaseModel):
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolExecutionResponse(BaseModel):
+    status: str
+    tool: str
+    result: dict[str, Any] | None = None
+    message: str | None = None
+    supported_tools: list[str] = Field(default_factory=list)

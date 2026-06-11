@@ -133,3 +133,46 @@ def test_reject_incident_rejects_proposed_actions(client, sample_alert):
     assert response.json()["status"] == "rejected"
     actions = client.get(f"/incidents/{incident_id}/actions").json()
     assert actions[0]["status"] == "rejected"
+
+
+def test_api_health_endpoint(client):
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["service"] == "Azure AIOps Agent"
+    assert "timestamp_utc" in body
+
+
+def test_api_tools_execute_search_resources(client):
+    response = client.post(
+        "/api/tools/execute",
+        json={
+            "tool": "search_resources",
+            "arguments": {
+                "subscriptions": ["sub-a"],
+                "resource_types": ["microsoft.compute/virtualmachines"],
+                "limit": 5,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["tool"] == "search_resources"
+    assert body["result"]["status"] == "configuration_only"
+
+
+def test_api_chat_routes_to_activity_logs_tool(client):
+    response = client.post(
+        "/api/chat",
+        json={"message": "What changed in the last 24 hours?"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["suggested_tool"] == "get_activity_logs"
+    assert body["tool_result"]["status"] in {"not_configured", "configuration_only", "ok", "partial"}
