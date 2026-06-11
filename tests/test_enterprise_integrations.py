@@ -2,6 +2,8 @@ from aiops_agent.azure_clients import (
     AzureEnterpriseIntegrationClient,
     build_default_alert_signal_query,
     build_resource_discovery_query,
+    build_security_findings_query,
+    summarize_security_findings,
 )
 from aiops_agent.azure_openai import AzureOpenAIService, _extract_response_text
 from aiops_agent.config import Settings
@@ -162,6 +164,86 @@ def test_discover_resources_is_configuration_only_with_subscriptions(tmp_path):
     assert response.status == "configuration_only"
     assert response.subscriptions == ["sub-a"]
     assert "Resources" in response.query
+
+
+def test_cost_analysis_requires_subscription_configuration(tmp_path):
+    settings = Settings(
+        state_file=tmp_path / "state.json",
+        azure_subscription_ids="",
+        enable_live_azure_integrations=False,
+    )
+    client = AzureEnterpriseIntegrationClient(settings)
+
+    response = client.get_cost_analysis()
+
+    assert response["status"] == "not_configured"
+
+
+def test_cost_analysis_returns_configuration_shape_when_live_disabled(tmp_path):
+    settings = Settings(
+        state_file=tmp_path / "state.json",
+        azure_subscription_ids="sub-a",
+        enable_live_azure_integrations=False,
+    )
+    client = AzureEnterpriseIntegrationClient(settings)
+
+    response = client.get_cost_analysis(timeframe="TheLastMonth", top=15)
+
+    assert response["status"] == "configuration_only"
+    assert response["subscriptions"] == ["sub-a"]
+    assert response["query_shape"]["timeframe"] == "TheLastMonth"
+    assert response["query_shape"]["dataset"]["top"] == 15
+
+
+def test_security_findings_requires_subscription_configuration(tmp_path):
+    settings = Settings(
+        state_file=tmp_path / "state.json",
+        azure_subscription_ids="",
+        enable_live_azure_integrations=False,
+    )
+    client = AzureEnterpriseIntegrationClient(settings)
+
+    response = client.get_security_findings()
+
+    assert response["status"] == "not_configured"
+
+
+def test_security_findings_returns_configuration_query_when_live_disabled(tmp_path):
+    settings = Settings(
+        state_file=tmp_path / "state.json",
+        azure_subscription_ids="sub-a",
+        enable_live_azure_integrations=False,
+    )
+    client = AzureEnterpriseIntegrationClient(settings)
+
+    response = client.get_security_findings(limit=40)
+
+    assert response["status"] == "configuration_only"
+    assert response["subscriptions"] == ["sub-a"]
+    assert "securityresources" in response["query"]
+    assert "limit 40" in response["query"]
+
+
+def test_security_findings_query_targets_unhealthy_assessments():
+    query = build_security_findings_query(25)
+
+    assert "microsoft.security/assessments" in query
+    assert 'status !in~ ("Healthy", "NotApplicable")' in query
+    assert "limit 25" in query
+
+
+def test_security_findings_summary_counts_severities():
+    findings = [
+        {"severity": "High"},
+        {"severity": "Medium"},
+        {"severity": "Low"},
+        {"severity": "Unspecified"},
+        {"severity": None},
+    ]
+
+    summary = summarize_security_findings(findings)
+
+    assert summary == {"high": 1, "medium": 1, "low": 1, "unknown": 2}
 
 
 def test_azure_openai_status_requires_endpoint_deployment_and_auth(tmp_path):

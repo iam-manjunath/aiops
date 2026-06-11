@@ -165,6 +165,30 @@ def test_api_tools_execute_search_resources(client):
     assert body["result"]["status"] == "configuration_only"
 
 
+def test_api_tools_execute_cost_analysis(client):
+    response = client.post(
+        "/api/tools/execute",
+        json={"tool": "get_cost_analysis", "arguments": {"timeframe": "MonthToDate", "top": 5}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "error"
+    assert body["result"]["status"] == "not_configured"
+
+
+def test_api_tools_execute_security_findings(client):
+    response = client.post(
+        "/api/tools/execute",
+        json={"tool": "get_security_findings", "arguments": {"limit": 20}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "error"
+    assert body["result"]["status"] == "not_configured"
+
+
 def test_api_chat_routes_to_activity_logs_tool(client):
     response = client.post(
         "/api/chat",

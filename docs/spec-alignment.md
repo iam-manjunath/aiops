@@ -22,8 +22,8 @@ This document maps the current implementation to `Specification.md` and highligh
   - `get_activity_logs`
   - `check_nsg_rules`
   - `investigate_incident`
-  - `get_cost_analysis` (extension point)
-  - `get_security_findings` (extension point)
+  - `get_cost_analysis` (Azure Cost Management query integration)
+  - `get_security_findings` (Defender assessment findings via Resource Graph)
   - `restart_vm` (extension point)
   - `start_vm` (extension point)
   - `stop_vm` (extension point)
@@ -50,7 +50,7 @@ This document maps the current implementation to `Specification.md` and highligh
 - Dedicated `chat_messages` history table (current model stores session summary and message counts in `chat_sessions`).
 - Azure AI Search + RAG knowledge base ingestion/query.
 - Cost Management API integration for trend and rightsizing analysis.
-- Defender for Cloud + Azure Policy evidence enrichment.
+- Defender for Cloud + Azure Policy deeper evidence enrichment (current: Defender assessments via `securityresources`).
 - Teams app channel and Teams message action integration.
 - Full React/Next.js frontend (current UI is server-rendered HTML).
 

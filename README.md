@@ -9,6 +9,7 @@ Azure-native AIOps MVP for VMs and VM Scale Sets. The agent ingests Azure Monito
 - Azure Monitor Action Group webhook ingestion.
 - Log Analytics KQL query and alert-signal polling endpoints.
 - Resource Graph discovery for existing VM, VMSS, and AKS resources.
+- Tool execution handlers for Azure Cost analysis and security findings.
 - Azure adapter boundaries for Monitor/Log Analytics, Resource Graph, Advisor, Compute, Automation, and Sentinel enrichment.
 - Bicep infrastructure scaffold for Azure Container Apps, managed identity, Log Analytics, Application Insights, Service Bus, Storage, and Key Vault.
 - Architecture and remediation catalog docs.

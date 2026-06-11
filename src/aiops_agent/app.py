@@ -300,19 +300,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "Execution tools are approval-gated and partially scaffolded in this MVP.",
             )
 
-        if tool_name in {"get_cost_analysis", "get_security_findings"}:
-            return (
-                "not_implemented",
-                {
-                    "requested_tool": tool_name,
-                    "status": "extension_point",
-                    "message": (
-                        "This tool is designed in the architecture but needs dedicated Azure Cost "
-                        "Management and Defender/Policy clients in a follow-up sprint."
-                    ),
-                },
-                None,
+        if tool_name == "get_cost_analysis":
+            response = integrations.get_cost_analysis(
+                subscriptions=parse_string_list(arguments.get("subscriptions")),
+                timeframe=str(arguments.get("timeframe") or "MonthToDate"),
+                top=parse_int(arguments.get("top"), 10),
             )
+            status = "ok" if response.get("status") in {"ok", "partial", "configuration_only"} else "error"
+            return status, response, response.get("message")
+
+        if tool_name == "get_security_findings":
+            response = integrations.get_security_findings(
+                subscriptions=parse_string_list(arguments.get("subscriptions")),
+                limit=parse_int(arguments.get("limit"), 100),
+            )
+            status = "ok" if response.get("status") in {"ok", "configuration_only"} else "error"
+            return status, response, response.get("message")
 
         return (
             "invalid_tool",

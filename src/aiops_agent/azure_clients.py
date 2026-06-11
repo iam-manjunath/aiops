@@ -303,6 +303,159 @@ class AzureEnterpriseIntegrationClient:
                 message=f"Resource Graph integration failed: {exc}",
             )
 
+    def get_cost_analysis(
+        self,
+        subscriptions: list[str] | None = None,
+        timeframe: str = "MonthToDate",
+        top: int = 10,
+    ) -> dict[str, Any]:
+        resolved_subscriptions = subscriptions or self.settings.subscription_id_list
+        if not resolved_subscriptions:
+            return {
+                "status": "not_configured",
+                "subscriptions": [],
+                "message": "Set AIOPS_AZURE_SUBSCRIPTION_IDS or pass subscriptions.",
+            }
+        if not self.settings.enable_live_azure_integrations:
+            return {
+                "status": "configuration_only",
+                "subscriptions": resolved_subscriptions,
+                "timeframe": timeframe,
+                "top": top,
+                "message": "Set AIOPS_ENABLE_LIVE_AZURE_INTEGRATIONS=true to query Cost Management.",
+                "query_shape": {
+                    "type": "ActualCost",
+                    "timeframe": timeframe,
+                    "dataset": {
+                        "granularity": "None",
+                        "aggregation": {"totalCost": {"name": "Cost", "function": "Sum"}},
+                        "grouping": [
+                            {"type": "Dimension", "name": "ResourceId"},
+                            {"type": "Dimension", "name": "ServiceName"},
+                        ],
+                        "top": top,
+                    },
+                },
+            }
+
+        results: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for subscription_id in resolved_subscriptions:
+            try:
+                query_response = self._query_cost_for_subscription(subscription_id, timeframe, top)
+                columns = [
+                    str(column.get("name"))
+                    for column in query_response.get("properties", {}).get("columns", [])
+                ]
+                rows = query_response.get("properties", {}).get("rows", [])
+                results.append(
+                    {
+                        "subscription_id": subscription_id,
+                        "columns": columns,
+                        "rows": [dict(zip(columns, row, strict=False)) for row in rows],
+                    }
+                )
+            except Exception as exc:
+                errors.append({"subscription_id": subscription_id, "message": str(exc)})
+
+        status = "ok"
+        if errors and results:
+            status = "partial"
+        if errors and not results:
+            status = "error"
+
+        return {
+            "status": status,
+            "timeframe": timeframe,
+            "subscriptions": resolved_subscriptions,
+            "subscription_results": results,
+            "errors": errors,
+        }
+
+    def get_security_findings(
+        self,
+        subscriptions: list[str] | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        resolved_subscriptions = subscriptions or self.settings.subscription_id_list
+        if not resolved_subscriptions:
+            return {
+                "status": "not_configured",
+                "subscriptions": [],
+                "message": "Set AIOPS_AZURE_SUBSCRIPTION_IDS or pass subscriptions.",
+            }
+
+        query = build_security_findings_query(limit)
+        if not self.settings.enable_live_azure_integrations:
+            return {
+                "status": "configuration_only",
+                "subscriptions": resolved_subscriptions,
+                "query": query,
+                "message": "Set AIOPS_ENABLE_LIVE_AZURE_INTEGRATIONS=true to query security findings.",
+            }
+
+        try:
+            resources = self._query_resource_graph(resolved_subscriptions, query)
+            return {
+                "status": "ok",
+                "subscriptions": resolved_subscriptions,
+                "query": query,
+                "findings": resources,
+                "finding_count": len(resources),
+                "severity_summary": summarize_security_findings(resources),
+            }
+        except Exception as exc:
+            return {
+                "status": "error",
+                "subscriptions": resolved_subscriptions,
+                "query": query,
+                "message": f"Security findings integration failed: {exc}",
+            }
+
+    def _query_cost_for_subscription(
+        self,
+        subscription_id: str,
+        timeframe: str,
+        top: int,
+    ) -> dict[str, Any]:
+        from azure.identity import DefaultAzureCredential
+
+        token = DefaultAzureCredential().get_token("https://management.azure.com/.default").token
+        url = (
+            "https://management.azure.com/subscriptions/"
+            f"{subscription_id}/providers/Microsoft.CostManagement/query?api-version=2023-03-01"
+        )
+        payload = {
+            "type": "ActualCost",
+            "timeframe": timeframe,
+            "dataset": {
+                "granularity": "None",
+                "aggregation": {"totalCost": {"name": "Cost", "function": "Sum"}},
+                "grouping": [
+                    {"type": "Dimension", "name": "ResourceId"},
+                    {"type": "Dimension", "name": "ServiceName"},
+                ],
+                "top": top,
+            },
+        }
+        response = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=45,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _query_resource_graph(self, subscriptions: list[str], query: str) -> list[dict[str, Any]]:
+        from azure.identity import DefaultAzureCredential
+        from azure.mgmt.resourcegraph import ResourceGraphClient
+        from azure.mgmt.resourcegraph.models import QueryRequest
+
+        client = ResourceGraphClient(DefaultAzureCredential())
+        response = client.resources(QueryRequest(subscriptions=subscriptions, query=query))
+        return list(response.data or [])
+
 
 def build_resource_context_queries(alert: NormalizedAlert) -> list[str]:
     quoted_resources = ",".join(f"'{resource_id}'" for resource_id in alert.resource_ids)
@@ -413,6 +566,33 @@ Resources
 | order by type asc, name asc
 | limit {limit}
 """.strip()
+
+
+def build_security_findings_query(limit: int) -> str:
+    return f"""
+securityresources
+| where type =~ "microsoft.security/assessments"
+| extend assessmentKey=name
+| extend status=tostring(properties.status.code)
+| extend severity=tostring(properties.metadata.severity)
+| extend displayName=tostring(properties.displayName)
+| extend resourceId=tostring(properties.resourceDetails.id)
+| where status !in~ ("Healthy", "NotApplicable")
+| project subscriptionId, resourceId, assessmentKey, displayName, severity, status
+| order by severity desc, displayName asc
+| limit {limit}
+""".strip()
+
+
+def summarize_security_findings(findings: list[dict[str, Any]]) -> dict[str, int]:
+    summary = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
+    for finding in findings:
+        severity = str(finding.get("severity") or "").strip().lower()
+        if severity in summary:
+            summary[severity] += 1
+        else:
+            summary["unknown"] += 1
+    return summary
 
 
 def is_guid(value: str) -> bool:
