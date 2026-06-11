@@ -50,13 +50,13 @@ from aiops_agent.models import (
     UserProfile,
 )
 from aiops_agent.remediation import RemediationExecutor
-from aiops_agent.state import JsonStateStore
+from aiops_agent.state import create_state_store
 from aiops_agent.workflow import AlertProcessor, is_log_analytics_incident_signal
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    store = JsonStateStore(settings.state_file)
+    store = create_state_store(settings)
     context_collector = AzureContextCollector(settings)
     analyzer = build_analyzer(settings)
     processor = AlertProcessor(store, context_collector, analyzer)

@@ -14,7 +14,10 @@ class Settings(BaseSettings):
 
     app_name: str = "Azure AIOps Agent"
     environment: str = "local"
+    state_backend: Literal["json", "postgres"] = "json"
     state_file: Path = Path(".data/aiops-state.json")
+    postgres_dsn: str | None = None
+    postgres_schema: str = "aiops"
     execution_mode: Literal["mock", "live"] = "mock"
     remediation_allowlist: str = (
         "restart_vm,resize_vmss,run_automation_webhook,adjust_autoscale_rule,"

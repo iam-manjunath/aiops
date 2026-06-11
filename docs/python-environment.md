@@ -19,9 +19,20 @@ python -m uvicorn aiops_agent.app:create_app --factory --host 127.0.0.1 --port 8
 Keep these settings while working locally:
 
 ```env
+AIOPS_STATE_BACKEND=json
 AIOPS_EXECUTION_MODE=mock
 AIOPS_ENABLE_LIVE_AZURE_INTEGRATIONS=false
 ```
+
+For enterprise persistence on PostgreSQL, use:
+
+```env
+AIOPS_STATE_BACKEND=postgres
+AIOPS_POSTGRES_DSN=postgresql://<user>:<password>@<host>:5432/<database>
+AIOPS_POSTGRES_SCHEMA=aiops
+```
+
+Schema bootstrap SQL: `infra/sql/001_state_store.sql`.
 
 ## Office Laptop Test
 

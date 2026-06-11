@@ -115,6 +115,18 @@ Invoke-RestMethod `
 
 Set `AIOPS_ENABLE_LIVE_AZURE_INTEGRATIONS=true` only after authenticating with Azure CLI locally or assigning managed identity/RBAC in Azure.
 
+## State Backend
+
+JSON remains the default backend for local development. For enterprise persistence, switch to PostgreSQL:
+
+```env
+AIOPS_STATE_BACKEND=postgres
+AIOPS_POSTGRES_DSN=postgresql://<user>:<password>@<host>:5432/<database>
+AIOPS_POSTGRES_SCHEMA=aiops
+```
+
+The state schema SQL bootstrap is available at `infra/sql/001_state_store.sql`.
+
 ## Safety Model
 
 The default execution mode is `mock`, so remediation calls are simulated. Set `AIOPS_EXECUTION_MODE=live` only after configuring managed identity/RBAC and reviewing `docs/remediation-catalog.md`.

@@ -9,6 +9,7 @@ This document maps the current implementation to `Specification.md` and highligh
 - Azure Resource Graph resource discovery for VM, VMSS, and AKS.
 - Azure Monitor/Log Analytics ingestion, polling, and incident creation.
 - Approval-gated remediation workflow with audit trail.
+- Pluggable persistence backend with local JSON and PostgreSQL support (`AIOPS_STATE_BACKEND`).
 - API contract additions requested in the specification:
   - `POST /api/chat`
   - `GET /api/health`
@@ -45,7 +46,7 @@ This document maps the current implementation to `Specification.md` and highligh
 
 ## Not Implemented Yet
 
-- PostgreSQL persistence layer (`users`, `chat_sessions`, `audit_logs`, `incidents`) in place of local JSON file.
+- Full relational schema from the specification (`users`, `chat_sessions`, dedicated incident relational model).
 - Azure AI Search + RAG knowledge base ingestion/query.
 - Cost Management API integration for trend and rightsizing analysis.
 - Defender for Cloud + Azure Policy evidence enrichment.
@@ -54,7 +55,7 @@ This document maps the current implementation to `Specification.md` and highligh
 
 ## Recommended Next Changes
 
-1. Add a PostgreSQL storage adapter and migration scripts, while keeping the existing store as local-dev fallback.
+1. Implement full `users` and `chat_sessions` tables with identity-to-session linkage for `/api/chat`.
 2. Implement Cost Management and Defender/Policy clients behind the existing tool dispatcher.
 3. Add first RAG pipeline with Azure AI Search index + document ingestion job for SOPs/runbooks.
 4. Expand remediation catalog to include `start_vm`, `stop_vm`, and `create_snapshot` with explicit guardrails and rollback notes.
