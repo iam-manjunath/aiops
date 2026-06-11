@@ -455,13 +455,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> ChatResponse:
         suggested_tool = infer_tool_from_message(request.message)
         if not suggested_tool:
+            assistant_message = (
+                "I can route this through operations tools. Try asking about resources, VM health, "
+                "activity changes, incident investigation, security, or costs."
+            )
+            persisted_session_id = store.record_chat_exchange(
+                session_id=request.session_id,
+                user=_user,
+                user_message=request.message,
+                assistant_message=assistant_message,
+                metadata={"suggested_tool": None, "tool_status": "not_routed"},
+            )
             return ChatResponse(
                 status="ok",
-                message=(
-                    "I can route this through operations tools. Try asking about resources, VM health, "
-                    "activity changes, incident investigation, security, or costs."
-                ),
-                session_id=request.session_id,
+                message=assistant_message,
+                session_id=persisted_session_id,
                 suggested_tool=None,
                 tool_result=None,
             )
@@ -474,11 +482,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         if tool_message:
             response_message = f"{response_message} {tool_message}"
+        persisted_session_id = store.record_chat_exchange(
+            session_id=request.session_id,
+            user=_user,
+            user_message=request.message,
+            assistant_message=response_message,
+            metadata={
+                "suggested_tool": suggested_tool,
+                "tool_status": tool_status,
+            },
+        )
 
         return ChatResponse(
             status="ok",
             message=response_message,
-            session_id=request.session_id,
+            session_id=persisted_session_id,
             suggested_tool=suggested_tool,
             tool_result=tool_result,
         )

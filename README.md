@@ -126,6 +126,7 @@ AIOPS_POSTGRES_SCHEMA=aiops
 ```
 
 The state schema SQL bootstrap is available at `infra/sql/001_state_store.sql`.
+When PostgreSQL backend is enabled, `/api/chat` also persists user/session records in `users` and `chat_sessions`.
 
 ## Safety Model
 

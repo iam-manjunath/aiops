@@ -1,12 +1,14 @@
 import json
+from datetime import datetime
 from pathlib import Path
 from threading import RLock
 from typing import Any, Protocol
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from aiops_agent.config import Settings
-from aiops_agent.models import AuditEvent, Incident, RemediationAction, utcnow
+from aiops_agent.models import AuditEvent, Incident, RemediationAction, UserProfile, utcnow
 
 
 class StateStore(Protocol):
@@ -18,12 +20,46 @@ class StateStore(Protocol):
     def upsert_action(self, action: RemediationAction) -> RemediationAction: ...
     def add_audit_event(self, event: AuditEvent) -> AuditEvent: ...
     def list_audit_events(self, incident_id: str | None = None) -> list[AuditEvent]: ...
+    def upsert_user(self, user: UserProfile, role: str = "Operator") -> str: ...
+    def record_chat_exchange(
+        self,
+        session_id: str | None,
+        user: UserProfile,
+        user_message: str,
+        assistant_message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str: ...
+    def get_chat_session(self, session_id: str) -> dict[str, Any] | None: ...
+
+
+class StoredUserRecord(BaseModel):
+    id: str
+    identity_key: str
+    username: str | None = None
+    email: str | None = None
+    role: str = "Operator"
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class ChatSessionRecord(BaseModel):
+    id: str
+    client_session_id: str | None = None
+    user_id: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    message_count: int = 0
+    last_user_message: str | None = None
+    last_assistant_message: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class StateSnapshot(BaseModel):
     incidents: dict[str, Incident] = Field(default_factory=dict)
     actions: dict[str, RemediationAction] = Field(default_factory=dict)
     audit_events: dict[str, AuditEvent] = Field(default_factory=dict)
+    users: dict[str, StoredUserRecord] = Field(default_factory=dict)
+    chat_sessions: dict[str, ChatSessionRecord] = Field(default_factory=dict)
 
 
 class JsonStateStore:
@@ -75,6 +111,78 @@ class JsonStateStore:
             if incident_id:
                 events = [event for event in events if event.incident_id == incident_id]
             return sorted(events, key=lambda item: item.created_at)
+
+    def upsert_user(self, user: UserProfile, role: str = "Operator") -> str:
+        with self._lock:
+            identity_key = _user_identity_key(user)
+            for existing in self._state.users.values():
+                if existing.identity_key == identity_key:
+                    existing.username = user.username or existing.username
+                    existing.email = user.email or existing.email
+                    existing.role = role or existing.role
+                    existing.updated_at = utcnow()
+                    self._state.users[existing.id] = existing
+                    self._save()
+                    return existing.id
+
+            user_id = str(uuid4())
+            record = StoredUserRecord(
+                id=user_id,
+                identity_key=identity_key,
+                username=user.username,
+                email=user.email,
+                role=role,
+            )
+            self._state.users[user_id] = record
+            self._save()
+            return user_id
+
+    def record_chat_exchange(
+        self,
+        session_id: str | None,
+        user: UserProfile,
+        user_message: str,
+        assistant_message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        with self._lock:
+            user_id = self.upsert_user(user)
+            record = self._find_chat_session(session_id)
+            if not record:
+                new_session_id = str(uuid4())
+                record = ChatSessionRecord(
+                    id=new_session_id,
+                    client_session_id=session_id,
+                    user_id=user_id,
+                )
+
+            record.user_id = user_id
+            record.message_count += 1
+            record.last_user_message = user_message
+            record.last_assistant_message = assistant_message
+            record.updated_at = utcnow()
+            merged_metadata = dict(record.metadata)
+            if metadata:
+                merged_metadata.update(metadata)
+            record.metadata = merged_metadata
+            self._state.chat_sessions[record.id] = record
+            self._save()
+            return record.id
+
+    def get_chat_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            record = self._find_chat_session(session_id)
+            return record.model_dump(mode="json") if record else None
+
+    def _find_chat_session(self, session_id: str | None) -> ChatSessionRecord | None:
+        if not session_id:
+            return None
+        if session_id in self._state.chat_sessions:
+            return self._state.chat_sessions[session_id]
+        for record in self._state.chat_sessions.values():
+            if record.client_session_id == session_id:
+                return record
+        return None
 
     def _load(self) -> StateSnapshot:
         if not self.path.exists():
@@ -155,6 +263,40 @@ class PostgresStateStore:
                     f"""
                     CREATE INDEX IF NOT EXISTS idx_audit_incident
                     ON "{self.schema}".audit_events (incident_id)
+                    """
+                )
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS "{self.schema}".users (
+                        id UUID PRIMARY KEY,
+                        identity_key VARCHAR(255) NOT NULL UNIQUE,
+                        username VARCHAR(255) NULL,
+                        email VARCHAR(255) NULL,
+                        role VARCHAR(100) NULL,
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL
+                    )
+                    """
+                )
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS "{self.schema}".chat_sessions (
+                        id UUID PRIMARY KEY,
+                        client_session_id VARCHAR(255) NULL UNIQUE,
+                        user_id UUID NULL REFERENCES "{self.schema}".users(id),
+                        created_at TIMESTAMPTZ NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL,
+                        message_count INTEGER NOT NULL DEFAULT 0,
+                        last_user_message TEXT NULL,
+                        last_assistant_message TEXT NULL,
+                        metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb
+                    )
+                    """
+                )
+                cur.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS idx_chat_sessions_user
+                    ON "{self.schema}".chat_sessions (user_id)
                     """
                 )
             conn.commit()
@@ -312,6 +454,153 @@ class PostgresStateStore:
                     rows = cur.fetchall()
             return [AuditEvent.model_validate(_read_payload(row[0])) for row in rows]
 
+    def upsert_user(self, user: UserProfile, role: str = "Operator") -> str:
+        with self._lock:
+            identity_key = _user_identity_key(user)
+            user_id = str(uuid4())
+            now = utcnow()
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        INSERT INTO "{self.schema}".users (
+                            id, identity_key, username, email, role, created_at, updated_at
+                        )
+                        VALUES (%s::uuid, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (identity_key) DO UPDATE SET
+                            username = EXCLUDED.username,
+                            email = EXCLUDED.email,
+                            role = EXCLUDED.role,
+                            updated_at = EXCLUDED.updated_at
+                        RETURNING id::text
+                        """,
+                        (
+                            user_id,
+                            identity_key,
+                            user.username,
+                            user.email,
+                            role,
+                            now,
+                            now,
+                        ),
+                    )
+                    row = cur.fetchone()
+                conn.commit()
+            return row[0]
+
+    def record_chat_exchange(
+        self,
+        session_id: str | None,
+        user: UserProfile,
+        user_message: str,
+        assistant_message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        with self._lock:
+            user_id = self.upsert_user(user)
+            existing = self._lookup_chat_session_id(session_id)
+            now = utcnow()
+            merged_metadata = dict(metadata or {})
+
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    if existing:
+                        cur.execute(
+                            f"""
+                            UPDATE "{self.schema}".chat_sessions
+                            SET
+                                user_id = %s::uuid,
+                                updated_at = %s,
+                                message_count = message_count + 1,
+                                last_user_message = %s,
+                                last_assistant_message = %s,
+                                metadata = COALESCE(metadata, '{{}}'::jsonb) || %s::jsonb
+                            WHERE id = %s::uuid
+                            RETURNING id::text
+                            """,
+                            (
+                                user_id,
+                                now,
+                                user_message,
+                                assistant_message,
+                                json.dumps(merged_metadata),
+                                existing,
+                            ),
+                        )
+                        row = cur.fetchone()
+                    else:
+                        new_session_id = str(uuid4())
+                        cur.execute(
+                            f"""
+                            INSERT INTO "{self.schema}".chat_sessions (
+                                id, client_session_id, user_id, created_at, updated_at,
+                                message_count, last_user_message, last_assistant_message, metadata
+                            )
+                            VALUES (%s::uuid, %s, %s::uuid, %s, %s, %s, %s, %s, %s::jsonb)
+                            RETURNING id::text
+                            """,
+                            (
+                                new_session_id,
+                                session_id,
+                                user_id,
+                                now,
+                                now,
+                                1,
+                                user_message,
+                                assistant_message,
+                                json.dumps(merged_metadata),
+                            ),
+                        )
+                        row = cur.fetchone()
+                conn.commit()
+            return row[0]
+
+    def get_chat_session(self, session_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT id::text, client_session_id, user_id::text, created_at, updated_at,
+                               message_count, last_user_message, last_assistant_message, metadata
+                        FROM "{self.schema}".chat_sessions
+                        WHERE id::text = %s OR client_session_id = %s
+                        LIMIT 1
+                        """,
+                        (session_id, session_id),
+                    )
+                    row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "client_session_id": row[1],
+                "user_id": row[2],
+                "created_at": row[3].isoformat() if row[3] else None,
+                "updated_at": row[4].isoformat() if row[4] else None,
+                "message_count": row[5],
+                "last_user_message": row[6],
+                "last_assistant_message": row[7],
+                "metadata": _read_payload(row[8]),
+            }
+
+    def _lookup_chat_session_id(self, session_id: str | None) -> str | None:
+        if not session_id:
+            return None
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id::text
+                    FROM "{self.schema}".chat_sessions
+                    WHERE id::text = %s OR client_session_id = %s
+                    LIMIT 1
+                    """,
+                    (session_id, session_id),
+                )
+                row = cur.fetchone()
+        return row[0] if row else None
+
 
 def create_state_store(settings: Settings) -> StateStore:
     if settings.state_backend == "postgres":
@@ -319,6 +608,16 @@ def create_state_store(settings: Settings) -> StateStore:
             raise ValueError("AIOPS_POSTGRES_DSN is required when AIOPS_STATE_BACKEND=postgres.")
         return PostgresStateStore(dsn=settings.postgres_dsn, schema=settings.postgres_schema)
     return JsonStateStore(settings.state_file)
+
+
+def _user_identity_key(user: UserProfile) -> str:
+    return (
+        user.object_id
+        or user.email
+        or user.username
+        or user.name
+        or ("local-authenticated" if user.authenticated else "local-unauthenticated")
+    )
 
 
 def _read_payload(value: Any) -> dict[str, Any]:

@@ -176,3 +176,29 @@ def test_api_chat_routes_to_activity_logs_tool(client):
     assert body["status"] == "ok"
     assert body["suggested_tool"] == "get_activity_logs"
     assert body["tool_result"]["status"] in {"not_configured", "configuration_only", "ok", "partial"}
+
+
+def test_api_chat_persists_session_history(client):
+    first = client.post("/api/chat", json={"message": "Show all production VMs"})
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["session_id"]
+
+    session_id = first_body["session_id"]
+    session_record = client.app.state.store.get_chat_session(session_id)
+    assert session_record is not None
+    assert session_record["message_count"] == 1
+    assert session_record["last_user_message"] == "Show all production VMs"
+
+    second = client.post(
+        "/api/chat",
+        json={"message": "What changed in the last 24 hours?", "session_id": session_id},
+    )
+    assert second.status_code == 200
+    second_body = second.json()
+    assert second_body["session_id"] == session_id
+
+    updated_session = client.app.state.store.get_chat_session(session_id)
+    assert updated_session is not None
+    assert updated_session["message_count"] == 2
+    assert updated_session["last_user_message"] == "What changed in the last 24 hours?"

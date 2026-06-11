@@ -10,6 +10,7 @@ This document maps the current implementation to `Specification.md` and highligh
 - Azure Monitor/Log Analytics ingestion, polling, and incident creation.
 - Approval-gated remediation workflow with audit trail.
 - Pluggable persistence backend with local JSON and PostgreSQL support (`AIOPS_STATE_BACKEND`).
+- Relational persistence for `users` and `chat_sessions` with `/api/chat` session tracking.
 - API contract additions requested in the specification:
   - `POST /api/chat`
   - `GET /api/health`
@@ -46,7 +47,7 @@ This document maps the current implementation to `Specification.md` and highligh
 
 ## Not Implemented Yet
 
-- Full relational schema from the specification (`users`, `chat_sessions`, dedicated incident relational model).
+- Dedicated `chat_messages` history table (current model stores session summary and message counts in `chat_sessions`).
 - Azure AI Search + RAG knowledge base ingestion/query.
 - Cost Management API integration for trend and rightsizing analysis.
 - Defender for Cloud + Azure Policy evidence enrichment.
@@ -55,7 +56,7 @@ This document maps the current implementation to `Specification.md` and highligh
 
 ## Recommended Next Changes
 
-1. Implement full `users` and `chat_sessions` tables with identity-to-session linkage for `/api/chat`.
+1. Add optional `chat_messages` table for full conversational history and analytics.
 2. Implement Cost Management and Defender/Policy clients behind the existing tool dispatcher.
 3. Add first RAG pipeline with Azure AI Search index + document ingestion job for SOPs/runbooks.
 4. Expand remediation catalog to include `start_vm`, `stop_vm`, and `create_snapshot` with explicit guardrails and rollback notes.
