@@ -14,9 +14,11 @@ from aiops_agent.auth import (
     auth_status,
     build_user_profile,
     configure_auth,
+    get_obo_access_token,
     microsoft_logout_url,
     require_user,
     session_user,
+    store_session_token,
 )
 from aiops_agent.azure_openai import AzureOpenAIService
 from aiops_agent.azure_clients import (
@@ -279,7 +281,63 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def kql_escape(value: str) -> str:
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
-    def execute_tool_call(tool_name: str, arguments: dict[str, Any]) -> tuple[str, dict[str, Any], str | None]:
+    def resolve_delegated_tokens(
+        request: Request,
+        *,
+        include_logs: bool = False,
+    ) -> tuple[str | None, str | None]:
+        if not (settings.auth_enabled and settings.auth_enable_obo):
+            return None, None
+
+        try:
+            management_token = get_obo_access_token(request, settings, settings.auth_obo_arm_scope)
+        except Exception as exc:
+            if settings.auth_strict_obo:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to acquire delegated ARM token: {exc}",
+                ) from exc
+            management_token = None
+
+        logs_token = None
+        if include_logs:
+            try:
+                logs_token = get_obo_access_token(
+                    request,
+                    settings,
+                    settings.auth_obo_log_analytics_scope,
+                )
+            except Exception as exc:
+                if settings.auth_strict_obo:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Failed to acquire delegated Log Analytics token: {exc}",
+                    ) from exc
+
+        if settings.auth_strict_obo:
+            if not management_token:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Strict delegated mode is enabled but ARM delegated token is unavailable.",
+                )
+            if include_logs and not logs_token:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Strict delegated mode is enabled but Log Analytics delegated token "
+                        "is unavailable."
+                    ),
+                )
+
+        return management_token, logs_token
+
+    def execute_tool_call(
+        tool_name: str,
+        arguments: dict[str, Any],
+        *,
+        management_token: str | None = None,
+        logs_token: str | None = None,
+    ) -> tuple[str, dict[str, Any], str | None]:
         if tool_name == "search_resources":
             request = ResourceDiscoveryRequest(
                 subscriptions=parse_string_list(arguments.get("subscriptions")),
@@ -287,7 +345,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 or ResourceDiscoveryRequest().resource_types,
                 limit=parse_int(arguments.get("limit"), 100),
             )
-            response = integrations.discover_resources(request)
+            response = integrations.discover_resources(request, access_token=management_token)
             return "ok", response.model_dump(mode="json"), None
 
         if tool_name == "query_monitor_metrics":
@@ -298,7 +356,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 workspace_id=arguments.get("workspace_id"),
                 timespan_minutes=parse_int(arguments.get("timespan_minutes"), 60),
             )
-            response = integrations.query_log_analytics(request)
+            response = integrations.query_log_analytics(
+                request,
+                access_token=management_token,
+                logs_access_token=logs_token,
+            )
             return "ok", response.model_dump(mode="json"), None
 
         if tool_name == "get_activity_logs":
@@ -316,7 +378,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 workspace_id=arguments.get("workspace_id"),
                 timespan_minutes=parse_int(arguments.get("timespan_minutes"), hours * 60),
             )
-            response = integrations.query_log_analytics(request)
+            response = integrations.query_log_analytics(
+                request,
+                access_token=management_token,
+                logs_access_token=logs_token,
+            )
             return "ok", response.model_dump(mode="json"), None
 
         if tool_name == "get_vm_health":
@@ -356,7 +422,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 workspace_id=arguments.get("workspace_id"),
                 timespan_minutes=parse_int(arguments.get("timespan_minutes"), 60),
             )
-            response = integrations.query_log_analytics(request)
+            response = integrations.query_log_analytics(
+                request,
+                access_token=management_token,
+                logs_access_token=logs_token,
+            )
             return "ok", response.model_dump(mode="json"), None
 
         if tool_name == "check_nsg_rules":
@@ -365,7 +435,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 resource_types=["microsoft.network/networksecuritygroups"],
                 limit=parse_int(arguments.get("limit"), 100),
             )
-            response = integrations.discover_resources(request)
+            response = integrations.discover_resources(request, access_token=management_token)
             payload = response.model_dump(mode="json")
             nsg_name = str(arguments.get("nsg_name") or "").strip().lower()
             if nsg_name and payload.get("resources"):
@@ -395,7 +465,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 workspace_id=arguments.get("workspace_id"),
                 timespan_minutes=parse_int(arguments.get("timespan_minutes"), 240),
             )
-            query_response = integrations.query_log_analytics(query_request)
+            query_response = integrations.query_log_analytics(
+                query_request,
+                access_token=management_token,
+                logs_access_token=logs_token,
+            )
             analysis_prompt = arguments.get("prompt") or (
                 "Investigate this incident dataset, summarize impact, likely root causes, and "
                 "approval-gated corrective actions."
@@ -437,6 +511,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 subscriptions=parse_string_list(arguments.get("subscriptions")),
                 timeframe=str(arguments.get("timeframe") or "MonthToDate"),
                 top=parse_int(arguments.get("top"), 10),
+                access_token=management_token,
             )
             status = "ok" if response.get("status") in {"ok", "partial", "configuration_only"} else "error"
             return status, response, response.get("message")
@@ -445,6 +520,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response = integrations.get_security_findings(
                 subscriptions=parse_string_list(arguments.get("subscriptions")),
                 limit=parse_int(arguments.get("limit"), 100),
+                access_token=management_token,
             )
             status = "ok" if response.get("status") in {"ok", "configuration_only"} else "error"
             return status, response, response.get("message")
@@ -562,6 +638,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         claims = dict(token.get("userinfo") or {})
         profile = build_user_profile(claims)
         request.session[SESSION_USER_KEY] = profile.model_dump(mode="json")
+        store_session_token(request, token)
         return RedirectResponse(url="/ui")
 
     @app.get("/auth/logout")
@@ -601,13 +678,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/tools/execute", response_model=ToolExecutionResponse)
     def api_tools_execute(
-        request: ToolExecutionRequest,
+        payload: ToolExecutionRequest,
+        request: Request,
         _user: UserProfile = Depends(current_user),
     ) -> ToolExecutionResponse:
-        status, result, message = execute_tool_call(request.tool, request.arguments)
+        needs_logs_token = payload.tool in {
+            "query_monitor_metrics",
+            "get_activity_logs",
+            "get_vm_health",
+            "investigate_incident",
+        }
+        management_token, logs_token = resolve_delegated_tokens(
+            request,
+            include_logs=needs_logs_token,
+        )
+        status, result, message = execute_tool_call(
+            payload.tool,
+            payload.arguments,
+            management_token=management_token,
+            logs_token=logs_token,
+        )
         return ToolExecutionResponse(
             status=status,
-            tool=request.tool,
+            tool=payload.tool,
             result=result,
             message=message,
             supported_tools=supported_tools,
@@ -620,14 +713,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/modules/{module_id}/run", response_model=ModuleRunResponse)
     def api_modules_run(
         module_id: str,
-        request: ModuleRunRequest,
+        payload: ModuleRunRequest,
+        request: Request,
         _user: UserProfile = Depends(current_user),
     ) -> ModuleRunResponse:
         actions = module_action_map.get(module_id)
         if not actions:
             raise HTTPException(status_code=404, detail=f"Module '{module_id}' not found.")
 
-        action = (request.action or module_default_action[module_id]).strip()
+        action = (payload.action or module_default_action[module_id]).strip()
         tool_name = actions.get(action)
         if not tool_name:
             available_actions = ", ".join(sorted(actions))
@@ -637,7 +731,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 f"Available actions: {available_actions}",
             )
 
-        status, result, message = execute_tool_call(tool_name, request.arguments)
+        needs_logs_token = tool_name in {
+            "query_monitor_metrics",
+            "get_activity_logs",
+            "get_vm_health",
+            "investigate_incident",
+        }
+        management_token, logs_token = resolve_delegated_tokens(
+            request,
+            include_logs=needs_logs_token,
+        )
+        status, result, message = execute_tool_call(
+            tool_name,
+            payload.arguments,
+            management_token=management_token,
+            logs_token=logs_token,
+        )
         return ModuleRunResponse(
             module=module_id,
             action=action,
@@ -648,19 +757,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/chat", response_model=ChatResponse)
     def api_chat(
-        request: ChatRequest,
+        payload: ChatRequest,
+        request: Request,
         _user: UserProfile = Depends(current_user),
     ) -> ChatResponse:
-        suggested_tool = infer_tool_from_message(request.message)
+        suggested_tool = infer_tool_from_message(payload.message)
         if not suggested_tool:
             assistant_message = (
                 "I can route this through operations tools. Try asking about resources, VM health, "
                 "activity changes, incident investigation, security, or costs."
             )
             persisted_session_id = store.record_chat_exchange(
-                session_id=request.session_id,
+                session_id=payload.session_id,
                 user=_user,
-                user_message=request.message,
+                user_message=payload.message,
                 assistant_message=assistant_message,
                 metadata={"suggested_tool": None, "tool_status": "not_routed"},
             )
@@ -672,8 +782,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 tool_result=None,
             )
 
-        tool_arguments = infer_arguments_from_message(request.message, suggested_tool)
-        tool_status, tool_result, tool_message = execute_tool_call(suggested_tool, tool_arguments)
+        tool_arguments = infer_arguments_from_message(payload.message, suggested_tool)
+        needs_logs_token = suggested_tool in {
+            "query_monitor_metrics",
+            "get_activity_logs",
+            "get_vm_health",
+            "investigate_incident",
+        }
+        management_token, logs_token = resolve_delegated_tokens(
+            request,
+            include_logs=needs_logs_token,
+        )
+        tool_status, tool_result, tool_message = execute_tool_call(
+            suggested_tool,
+            tool_arguments,
+            management_token=management_token,
+            logs_token=logs_token,
+        )
         response_message = (
             f"Executed tool '{suggested_tool}' with status '{tool_status}'. "
             "Review tool_result for evidence and next actions."
@@ -681,9 +806,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if tool_message:
             response_message = f"{response_message} {tool_message}"
         persisted_session_id = store.record_chat_exchange(
-            session_id=request.session_id,
+            session_id=payload.session_id,
             user=_user,
-            user_message=request.message,
+            user_message=payload.message,
             assistant_message=response_message,
             metadata={
                 "suggested_tool": suggested_tool,
@@ -709,9 +834,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/integrations/azure/subscriptions", response_model=AzureSubscriptionListResponse)
     def list_azure_subscriptions(
+        request: Request,
         _user: UserProfile = Depends(current_user),
     ) -> AzureSubscriptionListResponse:
-        return integrations.list_accessible_subscriptions()
+        management_token, _ = resolve_delegated_tokens(request, include_logs=False)
+        return integrations.list_accessible_subscriptions(access_token=management_token)
 
     @app.get("/integrations/azure-openai/status", response_model=AzureOpenAIStatus)
     def azure_openai_status(_user: UserProfile = Depends(current_user)) -> AzureOpenAIStatus:
@@ -752,29 +879,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/integrations/log-analytics/query", response_model=LogAnalyticsQueryResponse)
     def query_log_analytics(
-        request: LogAnalyticsQueryRequest,
+        payload: LogAnalyticsQueryRequest,
+        request: Request,
         _user: UserProfile = Depends(current_user),
     ) -> LogAnalyticsQueryResponse:
-        return integrations.query_log_analytics(request)
+        management_token, logs_token = resolve_delegated_tokens(request, include_logs=True)
+        return integrations.query_log_analytics(
+            payload,
+            access_token=management_token,
+            logs_access_token=logs_token,
+        )
 
     @app.post("/integrations/log-analytics/analyze", response_model=LogAnalyticsAnalyzeResponse)
     def analyze_log_analytics(
-        request: LogAnalyticsAnalyzeRequest,
+        payload: LogAnalyticsAnalyzeRequest,
+        request: Request,
         _user: UserProfile = Depends(current_user),
     ) -> LogAnalyticsAnalyzeResponse:
-        query_result = integrations.query_log_analytics(request)
+        management_token, logs_token = resolve_delegated_tokens(request, include_logs=True)
+        query_result = integrations.query_log_analytics(
+            payload,
+            access_token=management_token,
+            logs_access_token=logs_token,
+        )
         return azure_openai.analyze_log_rows(
             query_result=query_result,
-            prompt=request.prompt,
-            max_rows=request.max_rows,
+            prompt=payload.prompt,
+            max_rows=payload.max_rows,
         )
 
     @app.post("/integrations/log-analytics/poll-alerts", response_model=list[AlertIngestResponse])
     def poll_log_analytics_alerts(
-        request: AlertPollRequest,
+        payload: AlertPollRequest,
+        request: Request,
         _user: UserProfile = Depends(current_user),
     ) -> list[AlertIngestResponse]:
-        query_result = integrations.poll_workspace_alert_signals(request)
+        management_token, logs_token = resolve_delegated_tokens(request, include_logs=True)
+        query_result = integrations.poll_workspace_alert_signals(
+            payload,
+            access_token=management_token,
+            logs_access_token=logs_token,
+        )
         if query_result.status in {"error", "not_configured"}:
             raise HTTPException(status_code=400, detail=query_result.message)
         responses = []
@@ -785,10 +930,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/integrations/resource-graph/discover", response_model=ResourceDiscoveryResponse)
     def discover_resources(
-        request: ResourceDiscoveryRequest,
+        payload: ResourceDiscoveryRequest,
+        request: Request,
         _user: UserProfile = Depends(current_user),
     ) -> ResourceDiscoveryResponse:
-        return integrations.discover_resources(request)
+        management_token, _ = resolve_delegated_tokens(request, include_logs=False)
+        return integrations.discover_resources(payload, access_token=management_token)
 
     @app.get("/incidents", response_model=list[Incident])
     def list_incidents(_user: UserProfile = Depends(current_user)) -> list[Incident]:

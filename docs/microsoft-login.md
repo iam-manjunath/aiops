@@ -21,8 +21,12 @@ AIOPS_AUTH_TENANT_ID=<tenant-id-or-organizations>
 AIOPS_AUTH_CLIENT_ID=<app-client-id>
 AIOPS_AUTH_CLIENT_SECRET=<app-client-secret>
 AIOPS_AUTH_SESSION_SECRET=<long-random-string>
-AIOPS_AUTH_SCOPES=openid profile email
+AIOPS_AUTH_SCOPES=openid profile email offline_access
 AIOPS_AUTH_POST_LOGOUT_REDIRECT_URI=http://127.0.0.1:8000/
+AIOPS_AUTH_ENABLE_OBO=true
+AIOPS_AUTH_STRICT_OBO=true
+AIOPS_AUTH_OBO_ARM_SCOPE=https://management.azure.com/user_impersonation
+AIOPS_AUTH_OBO_LOG_ANALYTICS_SCOPE=https://api.loganalytics.io/Data.Read
 ```
 
 Start the app from the virtual environment:
@@ -37,6 +41,19 @@ Open:
 - `http://127.0.0.1:8000/auth/login`
 - `http://127.0.0.1:8000/me`
 - `http://127.0.0.1:8000/ui`
+
+## Delegated Azure Access (Browser Identity)
+
+When `AIOPS_AUTH_ENABLE_OBO=true`, the backend exchanges the signed-in session token
+for delegated downstream Azure tokens (On-Behalf-Of flow) and uses those tokens for:
+
+- Subscription discovery (`/integrations/azure/subscriptions`)
+- Resource Graph queries
+- Cost and security queries
+- Log Analytics query/poll
+
+Set `AIOPS_AUTH_STRICT_OBO=true` to block fallback to host identity and enforce
+per-user delegated access only.
 
 ## Protected Routes
 

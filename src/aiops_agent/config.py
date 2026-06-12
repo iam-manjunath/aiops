@@ -37,8 +37,12 @@ class Settings(BaseSettings):
     auth_client_id: str | None = None
     auth_client_secret: str | None = None
     auth_session_secret: str = "change-me-to-a-long-random-secret"
-    auth_scopes: str = "openid profile email"
+    auth_scopes: str = "openid profile email offline_access"
     auth_post_logout_redirect_uri: str = "http://127.0.0.1:8000/"
+    auth_enable_obo: bool = True
+    auth_strict_obo: bool = False
+    auth_obo_arm_scope: str = "https://management.azure.com/user_impersonation"
+    auth_obo_log_analytics_scope: str = "https://api.loganalytics.io/Data.Read"
 
     azure_openai_endpoint: str | None = None
     azure_openai_deployment: str | None = None

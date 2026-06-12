@@ -145,7 +145,13 @@ Invoke-RestMethod `
   -Uri http://127.0.0.1:8000/integrations/log-analytics/poll-alerts
 ```
 
-Set `AIOPS_ENABLE_LIVE_AZURE_INTEGRATIONS=true` only after authenticating with Azure CLI locally or assigning managed identity/RBAC in Azure.
+Set `AIOPS_ENABLE_LIVE_AZURE_INTEGRATIONS=true` only after one of these identity paths is ready:
+
+- Host identity (Azure CLI locally or managed identity/service principal in Azure)
+- Browser delegated identity with Entra login + OBO:
+  - `AIOPS_AUTH_ENABLED=true`
+  - `AIOPS_AUTH_ENABLE_OBO=true`
+  - `AIOPS_AUTH_STRICT_OBO=true` (recommended for strict per-user access)
 
 ## State Backend
 

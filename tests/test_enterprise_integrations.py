@@ -129,10 +129,10 @@ def test_discover_resources_auto_discovers_subscriptions_when_live_enabled(tmp_p
     )
     client = AzureEnterpriseIntegrationClient(settings)
 
-    client._list_accessible_subscriptions = lambda: [  # type: ignore[method-assign]
+    client._list_accessible_subscriptions = lambda access_token=None: [  # type: ignore[method-assign]
         AzureSubscription(subscription_id="sub-live", display_name="Live Subscription")
     ]
-    client._query_resource_graph = lambda subscriptions, query: [  # type: ignore[method-assign]
+    client._query_resource_graph = lambda subscriptions, query, access_token=None: [  # type: ignore[method-assign]
         {
             "id": "/subscriptions/sub-live/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
             "name": "vm1",

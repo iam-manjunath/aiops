@@ -1,6 +1,8 @@
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
+import httpx
 from authlib.integrations.starlette_client import OAuth
 from fastapi import HTTPException, Request, status
 from starlette.middleware.sessions import SessionMiddleware
@@ -9,6 +11,8 @@ from aiops_agent.config import Settings
 from aiops_agent.models import AuthStatus, UserProfile
 
 SESSION_USER_KEY = "user"
+SESSION_TOKEN_KEY = "token"
+SESSION_OBO_TOKENS_KEY = "obo_tokens"
 
 
 def configure_auth(app, settings: Settings) -> OAuth:
@@ -65,6 +69,62 @@ def require_user(request: Request, settings: Settings) -> UserProfile:
 def session_user(request: Request) -> UserProfile | None:
     user = request.session.get(SESSION_USER_KEY)
     return UserProfile.model_validate(user) if user else None
+
+
+def store_session_token(request: Request, token: dict[str, Any]) -> None:
+    request.session[SESSION_TOKEN_KEY] = {
+        "access_token": token.get("access_token"),
+        "refresh_token": token.get("refresh_token"),
+        "expires_at": token.get("expires_at"),
+        "token_type": token.get("token_type"),
+        "scope": token.get("scope"),
+    }
+
+
+def get_obo_access_token(request: Request, settings: Settings, scope: str) -> str | None:
+    if not settings.auth_enabled or not settings.auth_enable_obo:
+        return None
+    if not settings.auth_client_id or not settings.auth_client_secret:
+        return None
+
+    session_token = request.session.get(SESSION_TOKEN_KEY) or {}
+    user_assertion = str(session_token.get("access_token") or "").strip()
+    if not user_assertion:
+        return None
+
+    now = datetime.now(timezone.utc)
+    cached_tokens = request.session.get(SESSION_OBO_TOKENS_KEY) or {}
+    cached_entry = cached_tokens.get(scope)
+    if isinstance(cached_entry, dict):
+        access_token = str(cached_entry.get("access_token") or "").strip()
+        expires_at_raw = cached_entry.get("expires_at")
+        if access_token and isinstance(expires_at_raw, (int, float)):
+            if datetime.fromtimestamp(expires_at_raw, tz=timezone.utc) > now + timedelta(minutes=2):
+                return access_token
+
+    token_url = f"{settings.auth_authority}/oauth2/v2.0/token"
+    payload = {
+        "client_id": settings.auth_client_id,
+        "client_secret": settings.auth_client_secret,
+        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+        "requested_token_use": "on_behalf_of",
+        "assertion": user_assertion,
+        "scope": scope,
+    }
+    response = httpx.post(token_url, data=payload, timeout=30)
+    response.raise_for_status()
+    body = response.json()
+    access_token = str(body.get("access_token") or "").strip()
+    expires_in = int(body.get("expires_in") or 3600)
+    if not access_token:
+        return None
+
+    cached_tokens[scope] = {
+        "access_token": access_token,
+        "expires_at": int((now + timedelta(seconds=expires_in)).timestamp()),
+    }
+    request.session[SESSION_OBO_TOKENS_KEY] = cached_tokens
+    return access_token
 
 
 def build_user_profile(claims: dict[str, Any]) -> UserProfile:

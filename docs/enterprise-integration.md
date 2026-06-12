@@ -25,6 +25,16 @@ Invoke-RestMethod `
   -Uri http://127.0.0.1:8000/integrations/azure/subscriptions
 ```
 
+For strict browser-user delegated access, enable:
+
+```env
+AIOPS_AUTH_ENABLED=true
+AIOPS_AUTH_ENABLE_OBO=true
+AIOPS_AUTH_STRICT_OBO=true
+AIOPS_AUTH_OBO_ARM_SCOPE=https://management.azure.com/user_impersonation
+AIOPS_AUTH_OBO_LOG_ANALYTICS_SCOPE=https://api.loganalytics.io/Data.Read
+```
+
 When live mode is enabled and no subscription list is configured, `/integrations/resource-graph/discover`,
 cost analysis, and security findings use the discovered subscription set automatically.
 
