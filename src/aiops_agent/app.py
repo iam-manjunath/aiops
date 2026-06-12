@@ -1339,6 +1339,11 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
     .chat-msg pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; background: #eef4f8; padding: 8px; }
     .chat-input { width: 100%; box-sizing: border-box; margin-top: 10px; border: 1px solid #c9d6e4; padding: 10px; font: inherit; resize: vertical; min-height: 96px; border-radius: var(--mds-radius-sm); }
     .chat-actions { margin-top: 10px; display: flex; gap: 8px; }
+    .inventory { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    @media (max-width: 980px) { .inventory { grid-template-columns: 1fr; } }
+    .inventory-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .inventory-wrap { max-height: 340px; overflow: auto; border: 1px solid var(--mds-border); border-radius: var(--mds-radius-md); }
+    .status { font-size: 12px; color: var(--mds-muted); margin-top: 8px; }
     a:focus-visible, button:focus-visible, textarea:focus-visible { outline: 2px solid var(--mds-brand-accent); outline-offset: 2px; }
   </style>
 </head>
@@ -1350,6 +1355,7 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
       <a href="/">Status</a>
       <a href="/me">Profile</a>
       <a href="/ui#chat">Chat</a>
+      <a href="/ui#inventory">Inventory</a>
       <a href="/docs">API Docs</a>
       <a href="/api/status">JSON</a>
       __AUTH_LINK__
@@ -1374,6 +1380,34 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
         </div>
       </section>
     </div>
+    <section class="inventory" id="inventory">
+      <section class="panel">
+        <div class="inventory-head">
+          <h2>Accessible Subscriptions</h2>
+          <button class="secondary" onclick="loadInventory()">Refresh</button>
+        </div>
+        <div class="inventory-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Subscription ID</th><th>State</th></tr></thead>
+            <tbody id="subscriptions"></tbody>
+          </table>
+        </div>
+        <div class="status" id="subscriptionStatus"></div>
+      </section>
+      <section class="panel">
+        <div class="inventory-head">
+          <h2>Azure Resources</h2>
+          <button class="secondary" onclick="discoverResources()">Discover</button>
+        </div>
+        <div class="inventory-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>Type</th><th>Subscription</th><th>Resource Group</th></tr></thead>
+            <tbody id="resources"></tbody>
+          </table>
+        </div>
+        <div class="status" id="resourceStatus"></div>
+      </section>
+    </section>
   </main>
   <script>
     const CHAT_SESSION_KEY = 'aiops_chat_session_id';
@@ -1402,7 +1436,7 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
       chatLog.scrollTop = chatLog.scrollHeight;
     }
 
-    async function load() {
+    async function loadIncidents() {
       const rows = document.getElementById('incidents');
       const incidents = await fetch('/incidents').then(r => r.json());
       rows.innerHTML = incidents.map(i => `
@@ -1418,6 +1452,72 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
         </tr>`).join('');
     }
 
+    async function loadInventory() {
+      const subscriptionRows = document.getElementById('subscriptions');
+      const subscriptionStatus = document.getElementById('subscriptionStatus');
+      subscriptionRows.innerHTML = '';
+      subscriptionStatus.textContent = 'Loading subscriptions...';
+      try {
+        const response = await fetch('/integrations/azure/subscriptions');
+        const body = await response.json();
+        if (!response.ok) {
+          subscriptionStatus.textContent = body.detail || 'Failed to load subscriptions.';
+          return;
+        }
+        const subscriptions = body.subscriptions || [];
+        subscriptionRows.innerHTML = subscriptions.map(s => `
+          <tr>
+            <td>${s.display_name || 'n/a'}</td>
+            <td><span class="muted">${s.subscription_id || ''}</span></td>
+            <td>${s.state || 'n/a'}</td>
+          </tr>
+        `).join('');
+        if (!subscriptions.length) {
+          subscriptionRows.innerHTML = '<tr><td colspan="3" class="muted">No subscriptions found.</td></tr>';
+        }
+        subscriptionStatus.textContent = body.message || `Source: ${body.source || 'unknown'}`;
+      } catch (error) {
+        subscriptionStatus.textContent = `Failed to load subscriptions: ${error}`;
+      }
+    }
+
+    async function discoverResources() {
+      const resourceRows = document.getElementById('resources');
+      const resourceStatus = document.getElementById('resourceStatus');
+      resourceRows.innerHTML = '';
+      resourceStatus.textContent = 'Discovering resources...';
+      try {
+        const response = await fetch('/integrations/resource-graph/discover', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({limit: 150})
+        });
+        const body = await response.json();
+        if (!response.ok) {
+          resourceStatus.textContent = body.detail || 'Failed to discover resources.';
+          return;
+        }
+        const resources = body.resources || [];
+        resourceRows.innerHTML = resources.map(r => `
+          <tr>
+            <td>${r.name || 'n/a'}</td>
+            <td><span class="muted">${r.type || 'n/a'}</span></td>
+            <td>${r.subscriptionId || 'n/a'}</td>
+            <td>${r.resourceGroup || 'n/a'}</td>
+          </tr>
+        `).join('');
+        if (!resources.length) {
+          resourceRows.innerHTML = '<tr><td colspan="4" class="muted">No resources returned.</td></tr>';
+        }
+        const scopeText = (body.subscriptions || []).length
+          ? `${body.subscriptions.length} subscription(s)`
+          : 'no subscriptions';
+        resourceStatus.textContent = body.message || `${resources.length} resource(s) discovered across ${scopeText}.`;
+      } catch (error) {
+        resourceStatus.textContent = `Failed to discover resources: ${error}`;
+      }
+    }
+
     async function approve(id) {
       const approver = prompt('Approver email');
       if (!approver) return;
@@ -1426,7 +1526,9 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({approver, comment: 'Approved from UI'})
       });
-      load();
+    loadIncidents();
+    loadInventory();
+    discoverResources();
     }
     async function rejectIncident(id) {
       const rejected_by = prompt('Reviewer email');
@@ -1437,7 +1539,7 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({rejected_by, reason})
       });
-      load();
+      loadIncidents();
     }
 
     async function sendChat() {
@@ -1484,7 +1586,7 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
       }
     });
 
-    load();
+      loadIncidents();
   </script>
 </body>
 </html>

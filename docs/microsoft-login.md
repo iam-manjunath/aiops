@@ -12,6 +12,7 @@ Create a Microsoft Entra app registration for a web application:
 - Redirect URI: `https://<deployed-host>/auth/callback` for Azure deployment.
 - Client secret: create one and store it securely.
 - Supported account types: choose single tenant for internal enterprise use, or organizations for multi-tenant work/school accounts.
+- Expose an API scope on this app registration: `user_impersonation` (Application ID URI: `api://<app-client-id>`).
 
 ## Local `.env`
 
@@ -21,7 +22,7 @@ AIOPS_AUTH_TENANT_ID=<tenant-id-or-organizations>
 AIOPS_AUTH_CLIENT_ID=<app-client-id>
 AIOPS_AUTH_CLIENT_SECRET=<app-client-secret>
 AIOPS_AUTH_SESSION_SECRET=<long-random-string>
-AIOPS_AUTH_SCOPES=openid profile email offline_access
+AIOPS_AUTH_SCOPES=openid profile email offline_access api://<app-client-id>/user_impersonation
 AIOPS_AUTH_POST_LOGOUT_REDIRECT_URI=http://127.0.0.1:8000/
 AIOPS_AUTH_ENABLE_OBO=true
 AIOPS_AUTH_STRICT_OBO=true

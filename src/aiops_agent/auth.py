@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import base64
+import json
 from typing import Any
 from urllib.parse import urlencode
 
@@ -110,6 +112,20 @@ def get_obo_access_token(request: Request, settings: Settings, scope: str) -> st
     if not user_assertion:
         return None
 
+    assertion_audience = _jwt_audience(user_assertion)
+    expected_audiences = {
+        str(settings.auth_client_id or "").strip(),
+        f"api://{settings.auth_client_id}",
+    }
+    if assertion_audience and assertion_audience not in expected_audiences:
+        raise RuntimeError(
+            "Delegated token setup incomplete. The sign-in access token audience is "
+            f"'{assertion_audience}', but OBO expects '{settings.auth_client_id}' (or "
+            f"'api://{settings.auth_client_id}'). Update AIOPS_AUTH_SCOPES to include "
+            f"'api://{settings.auth_client_id}/user_impersonation', grant consent, "
+            "then sign out/sign in again."
+        )
+
     now = datetime.now(timezone.utc)
     obo_token_cache: dict[str, dict[str, dict[str, Any]]] = getattr(
         request.app.state,
@@ -135,7 +151,17 @@ def get_obo_access_token(request: Request, settings: Settings, scope: str) -> st
         "scope": scope,
     }
     response = httpx.post(token_url, data=payload, timeout=30)
-    response.raise_for_status()
+    if response.status_code >= 400:
+        message = response.text
+        try:
+            body = response.json()
+            error = body.get("error")
+            description = body.get("error_description")
+            if error or description:
+                message = f"{error}: {description}"
+        except Exception:
+            pass
+        raise RuntimeError(f"OBO token request failed ({response.status_code}): {message}")
     body = response.json()
     access_token = str(body.get("access_token") or "").strip()
     expires_in = int(body.get("expires_in") or 3600)
@@ -166,3 +192,26 @@ def build_user_profile(claims: dict[str, Any]) -> UserProfile:
 def microsoft_logout_url(settings: Settings) -> str:
     query = urlencode({"post_logout_redirect_uri": settings.auth_post_logout_redirect_uri})
     return f"{settings.auth_authority}/oauth2/v2.0/logout?{query}"
+
+
+def _jwt_audience(token: str) -> str | None:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    payload = _base64url_decode(parts[1])
+    if not payload:
+        return None
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except Exception:
+        return None
+    aud = data.get("aud")
+    return str(aud).strip() if aud else None
+
+
+def _base64url_decode(value: str) -> bytes | None:
+    try:
+        padding = "=" * (-len(value) % 4)
+        return base64.urlsafe_b64decode(value + padding)
+    except Exception:
+        return None
