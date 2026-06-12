@@ -11,10 +11,25 @@ Use both push and pull in enterprise environments:
 ## Existing Infrastructure Onboarding
 
 1. Assign the agent managed identity read access to the existing subscriptions or management-group scoped resource groups.
-2. Add `AIOPS_AZURE_SUBSCRIPTION_IDS` with comma-separated subscription IDs.
-3. Add `AIOPS_LOG_ANALYTICS_WORKSPACE_MAP` for one workspace per subscription, or `AIOPS_LOG_ANALYTICS_WORKSPACE_ID` for a central/default workspace.
-4. Keep `AIOPS_EXECUTION_MODE=mock` until approvals, RBAC, and runbooks have been validated.
-5. Enable `AIOPS_ENABLE_LIVE_AZURE_INTEGRATIONS=true` to allow live Resource Graph and Log Analytics reads.
+2. Option A: add `AIOPS_AZURE_SUBSCRIPTION_IDS` with comma-separated subscription IDs.
+3. Option B: leave `AIOPS_AZURE_SUBSCRIPTION_IDS` empty and allow subscription auto-discovery from the current Azure identity.
+4. Add `AIOPS_LOG_ANALYTICS_WORKSPACE_MAP` for one workspace per subscription, or `AIOPS_LOG_ANALYTICS_WORKSPACE_ID` for a central/default workspace.
+5. Keep `AIOPS_EXECUTION_MODE=mock` until approvals, RBAC, and runbooks have been validated.
+6. Enable `AIOPS_ENABLE_LIVE_AZURE_INTEGRATIONS=true` to allow live Resource Graph and Log Analytics reads.
+
+List the subscriptions the app can see:
+
+```powershell
+Invoke-RestMethod `
+  -Method Get `
+  -Uri http://127.0.0.1:8000/integrations/azure/subscriptions
+```
+
+When live mode is enabled and no subscription list is configured, `/integrations/resource-graph/discover`,
+cost analysis, and security findings use the discovered subscription set automatically.
+
+For Log Analytics query/poll, if no workspace id/map is configured, the app can auto-select a workspace
+for a subscription when one is discoverable.
 
 Example `.env` for separate workspaces:
 

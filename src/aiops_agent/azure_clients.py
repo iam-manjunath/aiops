@@ -8,6 +8,8 @@ from aiops_agent.config import Settings
 from aiops_agent.models import (
     ActionType,
     AlertPollRequest,
+    AzureSubscription,
+    AzureSubscriptionListResponse,
     IntegrationStatus,
     LogAnalyticsQueryRequest,
     LogAnalyticsQueryResponse,
@@ -182,11 +184,69 @@ class AzureEnterpriseIntegrationClient:
             ],
         )
 
+    def list_accessible_subscriptions(self) -> AzureSubscriptionListResponse:
+        configured = self.settings.subscription_id_list
+        if configured:
+            return AzureSubscriptionListResponse(
+                status="ok",
+                source="configuration",
+                subscriptions=[
+                    AzureSubscription(subscription_id=subscription_id)
+                    for subscription_id in configured
+                ],
+                message="Using configured subscription list from AIOPS_AZURE_SUBSCRIPTION_IDS.",
+            )
+
+        if not self.settings.enable_live_azure_integrations:
+            return AzureSubscriptionListResponse(
+                status="not_configured",
+                source="none",
+                subscriptions=[],
+                message=(
+                    "No configured subscriptions found. Set AIOPS_AZURE_SUBSCRIPTION_IDS or "
+                    "enable AIOPS_ENABLE_LIVE_AZURE_INTEGRATIONS=true to auto-discover."
+                ),
+            )
+
+        try:
+            discovered = self._list_accessible_subscriptions()
+        except Exception as exc:
+            return AzureSubscriptionListResponse(
+                status="error",
+                source="live_azure",
+                subscriptions=[],
+                message=f"Failed to discover subscriptions: {exc}",
+            )
+
+        if not discovered:
+            return AzureSubscriptionListResponse(
+                status="ok",
+                source="live_azure",
+                subscriptions=[],
+                message="No accessible subscriptions were returned for the current Azure identity.",
+            )
+
+        return AzureSubscriptionListResponse(
+            status="ok",
+            source="live_azure",
+            subscriptions=discovered,
+        )
+
     def query_log_analytics(self, request: LogAnalyticsQueryRequest) -> LogAnalyticsQueryResponse:
         workspace_id = request.workspace_id or self.settings.resolve_workspace_id(request.subscription_id)
+        if not workspace_id and self.settings.enable_live_azure_integrations:
+            if request.subscription_id:
+                workspace_id = self._discover_workspace_customer_id(request.subscription_id)
+            else:
+                subscriptions, _ = self._resolve_subscriptions(None)
+                if len(subscriptions) == 1:
+                    workspace_id = self._discover_workspace_customer_id(subscriptions[0])
         if not workspace_id:
             message = "Set AIOPS_LOG_ANALYTICS_WORKSPACE_ID, pass workspace_id, or configure "
-            message += "AIOPS_LOG_ANALYTICS_WORKSPACE_MAP and pass subscription_id."
+            message += (
+                "AIOPS_LOG_ANALYTICS_WORKSPACE_MAP and pass subscription_id. "
+                "With live integrations enabled, workspace can be auto-discovered for a subscription."
+            )
             return LogAnalyticsQueryResponse(
                 status="not_configured",
                 workspace_id=None,
@@ -265,14 +325,14 @@ class AzureEnterpriseIntegrationClient:
         )
 
     def discover_resources(self, request: ResourceDiscoveryRequest) -> ResourceDiscoveryResponse:
-        subscriptions = request.subscriptions or self.settings.subscription_id_list
+        subscriptions, subscription_message = self._resolve_subscriptions(request.subscriptions)
         query = build_resource_discovery_query(request.resource_types, request.limit)
         if not subscriptions:
             return ResourceDiscoveryResponse(
                 status="not_configured",
                 subscriptions=[],
                 query=query,
-                message="Set AIOPS_AZURE_SUBSCRIPTION_IDS or pass subscriptions.",
+                message=subscription_message or "Set AIOPS_AZURE_SUBSCRIPTION_IDS or pass subscriptions.",
             )
         if not self.settings.enable_live_azure_integrations:
             return ResourceDiscoveryResponse(
@@ -283,17 +343,12 @@ class AzureEnterpriseIntegrationClient:
             )
 
         try:
-            from azure.identity import DefaultAzureCredential
-            from azure.mgmt.resourcegraph import ResourceGraphClient
-            from azure.mgmt.resourcegraph.models import QueryRequest
-
-            client = ResourceGraphClient(DefaultAzureCredential())
-            response = client.resources(QueryRequest(subscriptions=subscriptions, query=query))
+            response = self._query_resource_graph(subscriptions, query)
             return ResourceDiscoveryResponse(
                 status="ok",
                 subscriptions=subscriptions,
                 query=query,
-                resources=list(response.data or []),
+                resources=response,
             )
         except Exception as exc:
             return ResourceDiscoveryResponse(
@@ -309,12 +364,12 @@ class AzureEnterpriseIntegrationClient:
         timeframe: str = "MonthToDate",
         top: int = 10,
     ) -> dict[str, Any]:
-        resolved_subscriptions = subscriptions or self.settings.subscription_id_list
+        resolved_subscriptions, subscription_message = self._resolve_subscriptions(subscriptions)
         if not resolved_subscriptions:
             return {
                 "status": "not_configured",
                 "subscriptions": [],
-                "message": "Set AIOPS_AZURE_SUBSCRIPTION_IDS or pass subscriptions.",
+                "message": subscription_message or "Set AIOPS_AZURE_SUBSCRIPTION_IDS or pass subscriptions.",
             }
         if not self.settings.enable_live_azure_integrations:
             return {
@@ -377,12 +432,12 @@ class AzureEnterpriseIntegrationClient:
         subscriptions: list[str] | None = None,
         limit: int = 100,
     ) -> dict[str, Any]:
-        resolved_subscriptions = subscriptions or self.settings.subscription_id_list
+        resolved_subscriptions, subscription_message = self._resolve_subscriptions(subscriptions)
         if not resolved_subscriptions:
             return {
                 "status": "not_configured",
                 "subscriptions": [],
-                "message": "Set AIOPS_AZURE_SUBSCRIPTION_IDS or pass subscriptions.",
+                "message": subscription_message or "Set AIOPS_AZURE_SUBSCRIPTION_IDS or pass subscriptions.",
             }
 
         query = build_security_findings_query(limit)
@@ -446,6 +501,74 @@ class AzureEnterpriseIntegrationClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def _resolve_subscriptions(self, requested: list[str] | None) -> tuple[list[str], str | None]:
+        if requested:
+            return requested, None
+        if self.settings.subscription_id_list:
+            return self.settings.subscription_id_list, None
+        if not self.settings.enable_live_azure_integrations:
+            return (
+                [],
+                "Set AIOPS_AZURE_SUBSCRIPTION_IDS or pass subscriptions.",
+            )
+
+        try:
+            discovered = self._list_accessible_subscriptions()
+        except Exception as exc:
+            return [], f"Subscription auto-discovery failed: {exc}"
+
+        subscription_ids = [item.subscription_id for item in discovered if item.subscription_id]
+        if not subscription_ids:
+            return [], "No accessible subscriptions were returned for the current Azure identity."
+        return subscription_ids, None
+
+    def _management_access_token(self) -> str:
+        from azure.identity import DefaultAzureCredential
+
+        return DefaultAzureCredential().get_token("https://management.azure.com/.default").token
+
+    def _list_accessible_subscriptions(self) -> list[AzureSubscription]:
+        token = self._management_access_token()
+        response = httpx.get(
+            "https://management.azure.com/subscriptions?api-version=2022-12-01",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=45,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        subscriptions = []
+        for item in payload.get("value", []):
+            subscriptions.append(
+                AzureSubscription(
+                    subscription_id=str(item.get("subscriptionId") or "").strip(),
+                    display_name=item.get("displayName"),
+                    state=item.get("state"),
+                    tenant_id=item.get("tenantId"),
+                )
+            )
+        return [item for item in subscriptions if item.subscription_id]
+
+    def _discover_workspace_customer_id(self, subscription_id: str) -> str | None:
+        token = self._management_access_token()
+        response = httpx.get(
+            "https://management.azure.com/subscriptions/"
+            f"{subscription_id}/providers/Microsoft.OperationalInsights/workspaces"
+            "?api-version=2023-09-01",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=45,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        workspaces = payload.get("value", [])
+        if not workspaces:
+            return None
+        sorted_workspaces = sorted(
+            workspaces,
+            key=lambda item: str(item.get("name") or "").lower(),
+        )
+        customer_id = sorted_workspaces[0].get("properties", {}).get("customerId")
+        return str(customer_id).strip() if customer_id else None
 
     def _query_resource_graph(self, subscriptions: list[str], query: str) -> list[dict[str, Any]]:
         from azure.identity import DefaultAzureCredential

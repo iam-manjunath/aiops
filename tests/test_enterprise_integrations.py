@@ -9,6 +9,7 @@ from aiops_agent.azure_openai import AzureOpenAIService, _extract_response_text
 from aiops_agent.config import Settings
 from aiops_agent.models import (
     AlertPollRequest,
+    AzureSubscription,
     LogAnalyticsQueryRequest,
     LogAnalyticsQueryResponse,
     ResourceDiscoveryRequest,
@@ -91,6 +92,21 @@ def test_workspace_map_accepts_json(tmp_path):
     assert settings.resolve_workspace_id("sub-a") == "workspace-a"
 
 
+def test_list_accessible_subscriptions_prefers_configured_values(tmp_path):
+    settings = Settings(
+        state_file=tmp_path / "state.json",
+        azure_subscription_ids="sub-a,sub-b",
+        enable_live_azure_integrations=True,
+    )
+    client = AzureEnterpriseIntegrationClient(settings)
+
+    response = client.list_accessible_subscriptions()
+
+    assert response.status == "ok"
+    assert response.source == "configuration"
+    assert [item.subscription_id for item in response.subscriptions] == ["sub-a", "sub-b"]
+
+
 def test_resource_discovery_query_includes_vmss_and_aks():
     query = build_resource_discovery_query(
         [
@@ -103,6 +119,38 @@ def test_resource_discovery_query_includes_vmss_and_aks():
     assert "microsoft.compute/virtualmachinescalesets" in query
     assert "microsoft.containerservice/managedclusters" in query
     assert "limit 25" in query
+
+
+def test_discover_resources_auto_discovers_subscriptions_when_live_enabled(tmp_path):
+    settings = Settings(
+        state_file=tmp_path / "state.json",
+        azure_subscription_ids="",
+        enable_live_azure_integrations=True,
+    )
+    client = AzureEnterpriseIntegrationClient(settings)
+
+    client._list_accessible_subscriptions = lambda: [  # type: ignore[method-assign]
+        AzureSubscription(subscription_id="sub-live", display_name="Live Subscription")
+    ]
+    client._query_resource_graph = lambda subscriptions, query: [  # type: ignore[method-assign]
+        {
+            "id": "/subscriptions/sub-live/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
+            "name": "vm1",
+            "type": "microsoft.compute/virtualmachines",
+        }
+    ]
+
+    response = client.discover_resources(
+        ResourceDiscoveryRequest(
+            subscriptions=None,
+            resource_types=["microsoft.compute/virtualmachines"],
+            limit=5,
+        )
+    )
+
+    assert response.status == "ok"
+    assert response.subscriptions == ["sub-live"]
+    assert len(response.resources) == 1
 
 
 def test_poll_alerts_requires_workspace_configuration(tmp_path):

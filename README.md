@@ -76,6 +76,17 @@ AIOPS_LOG_ANALYTICS_WORKSPACE_MAP={"sub-a":"workspace-a","sub-b":"workspace-b"}
 
 `AIOPS_LOG_ANALYTICS_WORKSPACE_ID` remains available as a default fallback workspace.
 
+If `AIOPS_AZURE_SUBSCRIPTION_IDS` is empty and live integrations are enabled, the app
+can auto-discover subscriptions for the current Azure identity.
+
+List discovered subscriptions:
+
+```powershell
+Invoke-RestMethod `
+  -Method Get `
+  -Uri http://127.0.0.1:8000/integrations/azure/subscriptions
+```
+
 Discover existing infrastructure across subscriptions:
 
 ```powershell

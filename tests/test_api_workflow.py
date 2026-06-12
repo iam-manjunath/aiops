@@ -48,6 +48,15 @@ def test_ai_search_status_endpoint_reports_not_configured(client):
     assert body["endpoint_configured"] is False
 
 
+def test_azure_subscriptions_endpoint_reports_not_configured_without_live_or_config(client):
+    response = client.get("/integrations/azure/subscriptions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "not_configured"
+    assert body["subscriptions"] == []
+
+
 def test_me_returns_html_profile_when_auth_is_disabled(client):
     response = client.get("/me")
 

@@ -167,6 +167,20 @@ class IntegrationStatus(BaseModel):
     supported_resource_types: list[str]
 
 
+class AzureSubscription(BaseModel):
+    subscription_id: str
+    display_name: str | None = None
+    state: str | None = None
+    tenant_id: str | None = None
+
+
+class AzureSubscriptionListResponse(BaseModel):
+    status: str
+    source: str
+    subscriptions: list[AzureSubscription] = Field(default_factory=list)
+    message: str | None = None
+
+
 class LogAnalyticsQueryRequest(BaseModel):
     query: str
     subscription_id: str | None = None

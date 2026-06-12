@@ -31,6 +31,7 @@ from aiops_agent.models import (
     ApproveRequest,
     AuthStatus,
     AuditEvent,
+    AzureSubscriptionListResponse,
     AzureAISearchStatus,
     AzureOpenAIStatus,
     AzureOpenAITestRequest,
@@ -113,6 +114,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "module_run": "POST /api/modules/{module_id}/run",
                 "azure_monitor_webhook": "POST /alerts/azure-monitor",
                 "integration_status": "GET /integrations/status",
+                "azure_subscriptions": "GET /integrations/azure/subscriptions",
                 "log_analytics_query": "POST /integrations/log-analytics/query",
                 "log_analytics_analyze": "POST /integrations/log-analytics/analyze",
                 "log_analytics_poll_alerts": "POST /integrations/log-analytics/poll-alerts",
@@ -704,6 +706,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/integrations/status", response_model=IntegrationStatus)
     def integration_status(_user: UserProfile = Depends(current_user)) -> IntegrationStatus:
         return integrations.status()
+
+    @app.get("/integrations/azure/subscriptions", response_model=AzureSubscriptionListResponse)
+    def list_azure_subscriptions(
+        _user: UserProfile = Depends(current_user),
+    ) -> AzureSubscriptionListResponse:
+        return integrations.list_accessible_subscriptions()
 
     @app.get("/integrations/azure-openai/status", response_model=AzureOpenAIStatus)
     def azure_openai_status(_user: UserProfile = Depends(current_user)) -> AzureOpenAIStatus:
