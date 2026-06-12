@@ -11,8 +11,7 @@ from aiops_agent.config import Settings
 from aiops_agent.models import AuthStatus, UserProfile
 
 SESSION_USER_KEY = "user"
-SESSION_TOKEN_KEY = "token"
-SESSION_OBO_TOKENS_KEY = "obo_tokens"
+SESSION_TOKEN_REF_KEY = "token_ref"
 
 
 def configure_auth(app, settings: Settings) -> OAuth:
@@ -71,14 +70,28 @@ def session_user(request: Request) -> UserProfile | None:
     return UserProfile.model_validate(user) if user else None
 
 
-def store_session_token(request: Request, token: dict[str, Any]) -> None:
-    request.session[SESSION_TOKEN_KEY] = {
+def _token_ref_for_user(user: UserProfile) -> str:
+    return (
+        user.object_id
+        or user.email
+        or user.username
+        or user.name
+        or "anonymous"
+    )
+
+
+def store_session_token(request: Request, token: dict[str, Any], user: UserProfile) -> None:
+    token_ref = _token_ref_for_user(user)
+    request.session[SESSION_TOKEN_REF_KEY] = token_ref
+    token_cache: dict[str, dict[str, Any]] = getattr(request.app.state, "session_token_cache", {})
+    token_cache[token_ref] = {
         "access_token": token.get("access_token"),
         "refresh_token": token.get("refresh_token"),
         "expires_at": token.get("expires_at"),
         "token_type": token.get("token_type"),
         "scope": token.get("scope"),
     }
+    request.app.state.session_token_cache = token_cache
 
 
 def get_obo_access_token(request: Request, settings: Settings, scope: str) -> str | None:
@@ -87,14 +100,24 @@ def get_obo_access_token(request: Request, settings: Settings, scope: str) -> st
     if not settings.auth_client_id or not settings.auth_client_secret:
         return None
 
-    session_token = request.session.get(SESSION_TOKEN_KEY) or {}
+    token_ref = str(request.session.get(SESSION_TOKEN_REF_KEY) or "").strip()
+    if not token_ref:
+        return None
+
+    session_token_cache: dict[str, dict[str, Any]] = getattr(request.app.state, "session_token_cache", {})
+    session_token = session_token_cache.get(token_ref) or {}
     user_assertion = str(session_token.get("access_token") or "").strip()
     if not user_assertion:
         return None
 
     now = datetime.now(timezone.utc)
-    cached_tokens = request.session.get(SESSION_OBO_TOKENS_KEY) or {}
-    cached_entry = cached_tokens.get(scope)
+    obo_token_cache: dict[str, dict[str, dict[str, Any]]] = getattr(
+        request.app.state,
+        "obo_token_cache",
+        {},
+    )
+    cached_tokens_for_ref = obo_token_cache.get(token_ref, {})
+    cached_entry = cached_tokens_for_ref.get(scope)
     if isinstance(cached_entry, dict):
         access_token = str(cached_entry.get("access_token") or "").strip()
         expires_at_raw = cached_entry.get("expires_at")
@@ -119,11 +142,12 @@ def get_obo_access_token(request: Request, settings: Settings, scope: str) -> st
     if not access_token:
         return None
 
-    cached_tokens[scope] = {
+    cached_tokens_for_ref[scope] = {
         "access_token": access_token,
         "expires_at": int((now + timedelta(seconds=expires_in)).timestamp()),
     }
-    request.session[SESSION_OBO_TOKENS_KEY] = cached_tokens
+    obo_token_cache[token_ref] = cached_tokens_for_ref
+    request.app.state.obo_token_cache = obo_token_cache
     return access_token
 
 

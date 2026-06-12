@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from aiops_agent.ai_search import AzureAISearchService
 from aiops_agent.analyzer import build_analyzer
 from aiops_agent.auth import (
+    SESSION_TOKEN_REF_KEY,
     SESSION_USER_KEY,
     auth_status,
     build_user_profile,
@@ -86,6 +87,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.integrations = integrations
     app.state.azure_openai = azure_openai
     app.state.ai_search = ai_search
+    app.state.session_token_cache = {}
+    app.state.obo_token_cache = {}
 
     def current_user(request: Request) -> UserProfile:
         return require_user(request, settings)
@@ -634,15 +637,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def auth_callback(request: Request):
         if not settings.auth_configured:
             raise HTTPException(status_code=500, detail="Microsoft login is not configured.")
-        token = await oauth.microsoft.authorize_access_token(request)
+        try:
+            token = await oauth.microsoft.authorize_access_token(request)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Authentication callback failed: {exc}",
+            ) from exc
         claims = dict(token.get("userinfo") or {})
         profile = build_user_profile(claims)
         request.session[SESSION_USER_KEY] = profile.model_dump(mode="json")
-        store_session_token(request, token)
+        store_session_token(request, token, profile)
         return RedirectResponse(url="/ui")
 
     @app.get("/auth/logout")
     def auth_logout(request: Request):
+        token_ref = str(request.session.get(SESSION_TOKEN_REF_KEY) or "").strip()
+        if token_ref:
+            token_cache = getattr(request.app.state, "session_token_cache", {})
+            token_cache.pop(token_ref, None)
+            request.app.state.session_token_cache = token_cache
+            obo_cache = getattr(request.app.state, "obo_token_cache", {})
+            obo_cache.pop(token_ref, None)
+            request.app.state.obo_token_cache = obo_cache
         request.session.clear()
         if settings.auth_enabled:
             return RedirectResponse(url=microsoft_logout_url(settings))
