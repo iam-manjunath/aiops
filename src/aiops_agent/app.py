@@ -875,24 +875,38 @@ def _status_ui(status: dict[str, Any]) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Service Status - Azure AIOps Agent</title>
   <style>
-    :root {{ font-family: Segoe UI, system-ui, sans-serif; color: #172033; background: #f6f8fb; }}
-    body {{ margin: 0; }}
-    header {{ background: #12395f; color: white; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }}
+    :root {{
+      font-family: Segoe UI, system-ui, sans-serif;
+      color: #0d2033;
+      background: #f5f8fb;
+      --mds-brand-deep: #002b45;
+      --mds-brand-main: #1267a8;
+      --mds-brand-accent: #42b0d5;
+      --mds-surface: #ffffff;
+      --mds-border: #d2deea;
+      --mds-muted: #4c6478;
+      --mds-success: #116149;
+      --mds-radius-sm: 6px;
+      --mds-radius-md: 8px;
+    }}
+    body {{ margin: 0; background: #f5f8fb; color: #0d2033; }}
+    header {{ background: var(--mds-brand-deep); color: white; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }}
     header h1 {{ font-size: 20px; margin: 0; }}
     nav {{ display: flex; gap: 14px; flex-wrap: wrap; }}
     nav a {{ color: white; text-decoration: none; font-weight: 600; }}
     main {{ max-width: 1120px; margin: 0 auto; padding: 28px 24px; }}
-    .hero {{ background: white; border: 1px solid #d9e1ec; border-radius: 8px; padding: 24px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }}
+    .hero {{ background: var(--mds-surface); border: 1px solid var(--mds-border); border-radius: var(--mds-radius-md); padding: 24px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }}
     .hero h2 {{ margin: 0 0 8px; font-size: 26px; }}
-    .muted {{ color: #5d6b7a; }}
-    .badge {{ display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; background: #e8f4ef; color: #116149; font-weight: 700; font-size: 13px; }}
+    .muted {{ color: var(--mds-muted); }}
+    .badge {{ display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; background: #e8f4ef; color: var(--mds-success); font-weight: 700; font-size: 13px; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-top: 18px; }}
-    .panel {{ background: white; border: 1px solid #d9e1ec; border-radius: 8px; padding: 18px; min-width: 0; }}
-    .label {{ color: #5d6b7a; font-size: 12px; text-transform: uppercase; font-weight: 700; margin-bottom: 8px; }}
+    .panel {{ background: var(--mds-surface); border: 1px solid var(--mds-border); border-radius: var(--mds-radius-md); padding: 18px; min-width: 0; }}
+    .label {{ color: var(--mds-muted); font-size: 12px; text-transform: uppercase; font-weight: 700; margin-bottom: 8px; }}
     .value {{ overflow-wrap: anywhere; font-size: 15px; }}
     .actions {{ display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }}
-    a.button {{ background: #1267a8; color: white; text-decoration: none; border-radius: 6px; padding: 10px 14px; font-weight: 600; }}
-    a.button.secondary {{ background: #eef4f8; color: #17466d; }}
+    a.button {{ background: var(--mds-brand-main); color: white; text-decoration: none; border-radius: var(--mds-radius-sm); padding: 10px 14px; font-weight: 600; }}
+    a.button.secondary {{ background: #eef4f8; color: #17466d; border: 1px solid var(--mds-border); }}
+    a:focus-visible {{ outline: 2px solid var(--mds-brand-accent); outline-offset: 2px; }}
     ul {{ margin: 10px 0 0; padding-left: 18px; }}
     li {{ margin: 6px 0; }}
   </style>
@@ -911,12 +925,12 @@ def _status_ui(status: dict[str, Any]) -> str:
     <section class="hero">
       <div>
         <h2>Service Status</h2>
-        <div class="muted">Python {html.escape(runtime["python_version"])} · FastAPI · {html.escape(status["environment"])}</div>
+        <div class="muted">Python {html.escape(runtime["python_version"])} | FastAPI | {html.escape(status["environment"])}</div>
       </div>
       <div class="badge">{html.escape(status["execution_mode"]).title()} Mode</div>
     </section>
     <section class="grid" aria-label="Service status details">
-      <div class="panel"><div class="label">Authentication</div><div class="value">{auth_state} · {auth_config}</div></div>
+      <div class="panel"><div class="label">Authentication</div><div class="value">{auth_state} | {auth_config}</div></div>
       <div class="panel"><div class="label">Authority</div><div class="value">{_escape(auth["authority"])}</div></div>
       <div class="panel"><div class="label">Azure Integration Mode</div><div class="value">{integration_mode}</div></div>
       <div class="panel"><div class="label">Live Azure Reads</div><div class="value">{live_reads}</div></div>
@@ -964,14 +978,26 @@ def _profile_ui(user: UserProfile | None, auth_enabled: bool) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Profile - Azure AIOps Agent</title>
   <style>
-    :root { font-family: Segoe UI, system-ui, sans-serif; color: #172033; background: #f6f8fb; }
-    body { margin: 0; }
-    header { background: #12395f; color: white; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    :root {
+      font-family: Segoe UI, system-ui, sans-serif;
+      color: #0d2033;
+      background: #f5f8fb;
+      --mds-brand-deep: #002b45;
+      --mds-brand-main: #1267a8;
+      --mds-brand-accent: #42b0d5;
+      --mds-surface: #ffffff;
+      --mds-border: #d2deea;
+      --mds-radius-sm: 6px;
+      --mds-radius-md: 8px;
+    }
+    body { margin: 0; background: #f5f8fb; color: #0d2033; }
+    header { background: var(--mds-brand-deep); color: white; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
     header h1 { font-size: 20px; margin: 0; }
     main { max-width: 920px; margin: 0 auto; padding: 28px 24px; }
-    .panel { background: white; border: 1px solid #d9e1ec; border-radius: 8px; padding: 24px; }
+    .panel { background: var(--mds-surface); border: 1px solid var(--mds-border); border-radius: var(--mds-radius-md); padding: 24px; }
     .actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
-    a.button { background: #1267a8; color: white; text-decoration: none; border-radius: 6px; padding: 10px 14px; font-weight: 600; }
+    a.button { background: var(--mds-brand-main); color: white; text-decoration: none; border-radius: var(--mds-radius-sm); padding: 10px 14px; font-weight: 600; }
+    a:focus-visible { outline: 2px solid var(--mds-brand-accent); outline-offset: 2px; }
     a.secondary { color: #17466d; text-decoration: none; font-weight: 600; }
   </style>
 </head>
@@ -1008,25 +1034,39 @@ def _profile_ui(user: UserProfile | None, auth_enabled: bool) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Profile - Azure AIOps Agent</title>
   <style>
-    :root {{ font-family: Segoe UI, system-ui, sans-serif; color: #172033; background: #f6f8fb; }}
-    body {{ margin: 0; }}
-    header {{ background: #12395f; color: white; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }}
+    :root {{
+      font-family: Segoe UI, system-ui, sans-serif;
+      color: #0d2033;
+      background: #f5f8fb;
+      --mds-brand-deep: #002b45;
+      --mds-brand-main: #1267a8;
+      --mds-brand-accent: #42b0d5;
+      --mds-surface: #ffffff;
+      --mds-border: #d2deea;
+      --mds-muted: #4c6478;
+      --mds-danger: #a83232;
+      --mds-radius-sm: 6px;
+      --mds-radius-md: 8px;
+    }}
+    body {{ margin: 0; background: #f5f8fb; color: #0d2033; }}
+    header {{ background: var(--mds-brand-deep); color: white; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }}
     header h1 {{ font-size: 20px; margin: 0; }}
     nav {{ display: flex; gap: 14px; flex-wrap: wrap; }}
     nav a {{ color: white; text-decoration: none; font-weight: 600; }}
     main {{ max-width: 1080px; margin: 0 auto; padding: 28px 24px; }}
-    .summary {{ display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; background: white; border: 1px solid #d9e1ec; border-radius: 8px; padding: 24px; }}
-    .avatar {{ width: 76px; height: 76px; border-radius: 50%; background: #1267a8; color: white; display: grid; place-items: center; font-size: 26px; font-weight: 700; }}
+    .summary {{ display: grid; grid-template-columns: auto 1fr; gap: 18px; align-items: center; background: var(--mds-surface); border: 1px solid var(--mds-border); border-radius: var(--mds-radius-md); padding: 24px; }}
+    .avatar {{ width: 76px; height: 76px; border-radius: 50%; background: var(--mds-brand-main); color: white; display: grid; place-items: center; font-size: 26px; font-weight: 700; }}
     h2 {{ margin: 0 0 6px; font-size: 24px; }}
-    .muted {{ color: #5d6b7a; }}
+    .muted {{ color: var(--mds-muted); }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 18px; }}
-    .field {{ background: white; border: 1px solid #d9e1ec; border-radius: 8px; padding: 16px; min-width: 0; }}
-    .label {{ color: #5d6b7a; font-size: 12px; text-transform: uppercase; font-weight: 700; margin-bottom: 8px; }}
+    .field {{ background: var(--mds-surface); border: 1px solid var(--mds-border); border-radius: var(--mds-radius-md); padding: 16px; min-width: 0; }}
+    .label {{ color: var(--mds-muted); font-size: 12px; text-transform: uppercase; font-weight: 700; margin-bottom: 8px; }}
     .value {{ overflow-wrap: anywhere; font-size: 15px; }}
     .actions {{ display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }}
-    a.button {{ background: #1267a8; color: white; text-decoration: none; border-radius: 6px; padding: 10px 14px; font-weight: 600; }}
-    a.button.secondary {{ background: #eef4f8; color: #17466d; }}
-    a.button.danger {{ background: #a83232; }}
+    a.button {{ background: var(--mds-brand-main); color: white; text-decoration: none; border-radius: var(--mds-radius-sm); padding: 10px 14px; font-weight: 600; }}
+    a.button.secondary {{ background: #eef4f8; color: #17466d; border: 1px solid var(--mds-border); }}
+    a.button.danger {{ background: var(--mds-danger); }}
+    a:focus-visible {{ outline: 2px solid var(--mds-brand-accent); outline-offset: 2px; }}
   </style>
 </head>
 <body>
@@ -1086,9 +1126,23 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Azure AIOps Agent</title>
   <style>
-    :root { font-family: Segoe UI, system-ui, sans-serif; color: #172033; background: #f6f8fb; }
-    body { margin: 0; }
-    header { background: #12395f; color: white; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; }
+    :root {
+      font-family: Segoe UI, system-ui, sans-serif;
+      color: #0d2033;
+      background: #f5f8fb;
+      --mds-brand-deep: #002b45;
+      --mds-brand-main: #1267a8;
+      --mds-brand-accent: #42b0d5;
+      --mds-surface: #ffffff;
+      --mds-border: #d2deea;
+      --mds-muted: #4c6478;
+      --mds-success: #127a5b;
+      --mds-danger: #a83232;
+      --mds-radius-sm: 6px;
+      --mds-radius-md: 8px;
+    }
+    body { margin: 0; background: #f5f8fb; color: #0d2033; }
+    header { background: var(--mds-brand-deep); color: white; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; }
     header h1 { margin: 0; font-size: 24px; }
     nav { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
     nav a { color: white; text-decoration: none; font-weight: 600; }
@@ -1096,23 +1150,24 @@ def _approval_ui(user: UserProfile | None = None, auth_enabled: bool = False) ->
     main { max-width: 1160px; margin: 0 auto; padding: 24px; }
     .layout { display: grid; grid-template-columns: 1.45fr 1fr; gap: 18px; align-items: start; }
     @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
-    .panel { background: white; border: 1px solid #d9e1ec; padding: 12px; }
+    .panel { background: var(--mds-surface); border: 1px solid var(--mds-border); border-radius: var(--mds-radius-md); padding: 12px; }
     .panel h2 { margin: 0 0 12px; font-size: 18px; }
-    table { width: 100%; border-collapse: collapse; background: white; border: 1px solid #d9e1ec; }
+    table { width: 100%; border-collapse: collapse; background: var(--mds-surface); border: 1px solid var(--mds-border); }
     th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e6edf5; vertical-align: top; }
     th { background: #edf3f8; font-size: 13px; text-transform: uppercase; }
     button { border: 0; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
-    .approve { background: #127a5b; color: white; }
-    .reject { background: #a83232; color: white; }
-    .secondary { background: #d9e1ec; color: #17344f; }
-    .muted { color: #5d6b7a; }
+    .approve { background: var(--mds-success); color: white; }
+    .reject { background: var(--mds-danger); color: white; }
+    .secondary { background: #d9e1ec; color: #17344f; border: 1px solid var(--mds-border); }
+    .muted { color: var(--mds-muted); }
     .actions { display: flex; gap: 8px; }
-    .chat-log { min-height: 320px; max-height: 520px; overflow-y: auto; border: 1px solid #d9e1ec; padding: 10px; background: #f8fbff; }
-    .chat-msg { margin-bottom: 10px; padding: 8px 10px; border: 1px solid #d9e1ec; background: white; }
-    .chat-msg .who { font-size: 12px; color: #5d6b7a; margin-bottom: 4px; text-transform: uppercase; }
+    .chat-log { min-height: 320px; max-height: 520px; overflow-y: auto; border: 1px solid var(--mds-border); padding: 10px; background: #f8fbff; border-radius: var(--mds-radius-md); }
+    .chat-msg { margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--mds-border); background: var(--mds-surface); border-radius: var(--mds-radius-sm); }
+    .chat-msg .who { font-size: 12px; color: var(--mds-muted); margin-bottom: 4px; text-transform: uppercase; }
     .chat-msg pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; background: #eef4f8; padding: 8px; }
-    .chat-input { width: 100%; box-sizing: border-box; margin-top: 10px; border: 1px solid #c9d6e4; padding: 10px; font: inherit; resize: vertical; min-height: 96px; }
+    .chat-input { width: 100%; box-sizing: border-box; margin-top: 10px; border: 1px solid #c9d6e4; padding: 10px; font: inherit; resize: vertical; min-height: 96px; border-radius: var(--mds-radius-sm); }
     .chat-actions { margin-top: 10px; display: flex; gap: 8px; }
+    a:focus-visible, button:focus-visible, textarea:focus-visible { outline: 2px solid var(--mds-brand-accent); outline-offset: 2px; }
   </style>
 </head>
 <body>
